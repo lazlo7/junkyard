@@ -8,4 +8,4 @@ build/
 dist/
 /data/
 /junkyard.toml
-
+.tmp/
