@@ -186,6 +186,18 @@ class FileStore:
             raise FileError(503, "Transfer capacity reached; retry later")
         self._transfers += 1
 
+    def list_files(self, page: int, page_size: int = 25) -> dict:
+        """A bounded, consistent snapshot using the same quota lock as transfers."""
+        with self._lock, self.database.connect() as connection:
+            now = int(self._clock())
+            connection.execute("BEGIN")
+            total = connection.execute("SELECT COUNT(*) FROM files WHERE expires_at IS NULL OR expires_at > ?", (now,)).fetchone()[0]
+            rows = connection.execute("""SELECT * FROM files WHERE expires_at IS NULL OR expires_at > ?
+                ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?""", (now, page_size, (page - 1) * page_size)).fetchall()
+            return {"files": [FileRecord(**dict(row)) for row in rows], "page": page,
+                    "pages": max(1, (total + page_size - 1) // page_size), "total": total,
+                    "used_bytes": self.used_bytes, "quota_bytes": self.settings.storage_quota_bytes}
+
     def _blob_path(self, blob: str) -> Path:
         if not isinstance(blob, str) or not re.fullmatch(r"[0-9a-f]{32}", blob):
             raise StoreError("invalid blob reference in metadata")

@@ -10,7 +10,20 @@ import time
 from typing import Iterator, Literal
 
 CredentialKind = Literal["cli", "browser"]
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+
+def create_session_schema(connection: sqlite3.Connection) -> None:
+    connection.execute("""
+        CREATE TABLE browser_sessions (
+            token_hash TEXT PRIMARY KEY,
+            credential_version INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            last_seen INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL
+        )
+    """)
+    connection.execute("CREATE INDEX sessions_expiration ON browser_sessions(expires_at)")
 
 
 def create_file_schema(connection: sqlite3.Connection) -> None:
@@ -81,7 +94,7 @@ class Database:
             connection = sqlite3.connect(self.path.as_uri() + "?mode=rw", uri=True, timeout=5)
             try:
                 connection.row_factory = sqlite3.Row
-                if connection.execute("PRAGMA user_version").fetchone()[0] not in (1, SCHEMA_VERSION):
+                if connection.execute("PRAGMA user_version").fetchone()[0] not in (1, 2, SCHEMA_VERSION):
                     raise StoreError("unsupported database schema version")
                 yield connection
             finally:
@@ -105,8 +118,11 @@ class Database:
         self.check_initialized()
         with self.connect() as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
-            if connection.execute("PRAGMA user_version").fetchone()[0] == 1:
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version == 1:
                 create_file_schema(connection)
+            if version < 3:
+                create_session_schema(connection)
                 connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def initialize(self, cli_hash: str, browser_hash: str) -> None:
@@ -137,6 +153,7 @@ class Database:
                             [("cli", cli_hash, int(time.time())), ("browser", browser_hash, int(time.time()))],
                         )
                         create_file_schema(connection)
+                        create_session_schema(connection)
                         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 finally:
                     connection.close()
@@ -169,4 +186,6 @@ class Database:
             )
             if result.rowcount != 1:
                 raise StoreError("credential is not initialized")
+            if kind == "browser" and connection.execute("PRAGMA user_version").fetchone()[0] >= 3:
+                connection.execute("DELETE FROM browser_sessions")
 

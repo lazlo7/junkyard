@@ -105,6 +105,9 @@ async def upload_file(request: Request, filename: str | None = None, file_id: st
                 await run_in_threadpool(store.write, upload, memoryview(chunk)[start:start + CHUNK_SIZE])
         if length is not None and length != upload.size:
             raise FileError(400, "Upload length does not match Content-Length")
+        if getattr(request.state, "browser_session", None) is not None and request.url.path.startswith("/admin/"):
+            # Recheck after a potentially long transfer, before publishing it.
+            await run_in_threadpool(request.app.state.browser_auth.require_live, request.state.browser_session)
         record = await run_in_threadpool(store.finish, upload)
         return mutation_response(request, record, 201 if file_id is None else 200)
     except ClientDisconnect:

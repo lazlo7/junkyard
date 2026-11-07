@@ -41,6 +41,7 @@ def read(store, file_id):
 
 def test_migration_preserves_credentials_and_is_idempotent(database, hashes):
     with database.connect() as connection, connection:
+        connection.execute("DROP TABLE browser_sessions")
         connection.execute("DROP TABLE files")
         connection.execute("PRAGMA user_version = 1")
     with pytest.raises(StoreError, match="migrate"):
@@ -56,6 +57,7 @@ def test_migration_preserves_credentials_and_is_idempotent(database, hashes):
 
 def test_failed_migration_rolls_back(database, monkeypatch):
     with database.connect() as connection, connection:
+        connection.execute("DROP TABLE browser_sessions")
         connection.execute("DROP TABLE files")
         connection.execute("PRAGMA user_version = 1")
 

@@ -91,6 +91,7 @@ def test_serve_uses_private_single_worker_defaults(database, config_file, monkey
 def test_migrate_command_upgrades_without_password_prompts(database, config_file, monkeypatch, capsys):
     original_hash = database.password_hash("cli")
     with database.connect() as connection, connection:
+        connection.execute("DROP TABLE browser_sessions")
         connection.execute("DROP TABLE files")
         connection.execute("PRAGMA user_version = 1")
     monkeypatch.setattr("junkyard.cli.getpass.getpass", lambda prompt: pytest.fail("migration must not prompt for credentials"))

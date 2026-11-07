@@ -4,10 +4,11 @@ A personal, self-hosted, CLI-centric file server. The approved design is in
 [docs/architecture.md](docs/architecture.md), with milestones in
 [docs/implementation-plan.md](docs/implementation-plan.md).
 
-Milestones 1–4 provide configuration, private SQLite storage, password
+Milestones 1–5 provide configuration, private SQLite storage, password
 administration, Basic authentication, streaming CLI file operations, expiration
 cleanup and recovery, HEAD/range downloads, request throttling, and a public
-browser viewer. Browser administration and sessions belong to milestone 5.
+browser viewer, and secured browser administration. Deployment and release
+checks remain milestone 6.
 
 ## Development setup
 
@@ -25,18 +26,18 @@ already exist; the data directory itself will be created privately by `init`.
 Unknown configuration keys, invalid types, non-HTTPS public origins, URLs with
 credentials or paths, and non-loopback bind addresses are rejected.
 
-Existing milestone 1 databases require a schema upgrade. Stop the server and
+Existing milestone 1–4 databases require a schema upgrade. Stop the server and
 back up the data directory, then run:
 
 ```sh
 .venv/bin/uv run --locked junkyard migrate
 ```
 
-The upgrade adds file metadata in a transaction and preserves both credentials.
+The upgrade transactionally adds the missing tables and preserves existing
+files and both credentials. Milestone 5 uses schema version 3 for browser sessions.
 Running it again is harmless. New `init` commands create the current schema
 directly; the server refuses an old schema until it is migrated.
 
-Milestones 3–4 keep schema version 2, so milestone 2 databases need no migration.
 Startup recovery now removes abandoned staging files and unreferenced blobs
 after verifying all referenced content. It also processes expired files.
 
@@ -72,8 +73,9 @@ outside this boundary.
 
 Each reset updates only the selected credential and increments its version.
 The running server reads the current CLI hash on every authentication attempt,
-so an old CLI password stops working after reset. Browser session revocation will
-use the browser credential version when sessions are implemented in milestone 5.
+so an old CLI password stops working after reset. Resetting the browser password
+revokes every browser session in the same transaction. CLI-password changes do
+not revoke browser sessions.
 
 For an alternative configuration file, put the global option before the command:
 
@@ -242,13 +244,61 @@ Preview policy:
 Pages use autoescaped Jinja2 templates, a restrictive CSP, `nosniff`, no-store,
 no-referrer, and fixed local CSS/JavaScript. Uploaded bytes have a sandbox CSP as
 additional protection. No uploaded HTML, SVG, PDF, script, or stylesheet is
-served as active content. Only the two exact application asset paths are exempt
+served as active content. Only the fixed application asset paths are exempt
 from anonymous rate limits; viewer and media requests consume the usual budget.
 
 Viewer GET/HEAD failures return HTML when requested, including missing links and
 rate limits. Headless requests and explicit raw/download errors return JSON.
 Status codes and useful headers such as `Retry-After`, `WWW-Authenticate`, and
 `Content-Range` are preserved; HEAD never has a response body.
+
+## Browser administration
+
+Open `https://files.example.com/admin/` through the configured HTTPS origin and
+sign in with the **browser** password. HTTP Basic credentials do not authorize
+admin routes, and browser cookies do not authorize CLI mutations. `public_url`
+must match the origin you use, including any non-default port. Access through a
+different hostname or plain HTTP will not support login; Secure cookies and
+Origin checks are always enabled.
+
+The dashboard provides:
+
+- A paginated list of live files, 25 per page, with viewer/download links and UTC
+  timestamps. Expired files disappear immediately from the list.
+- Storage usage using the same accounting as uploads: staging, obsolete pinned
+  blobs, and files awaiting cleanup still count toward quota.
+- Upload with optional filename, lifetime, and long link. “Edit or replace” lets
+  you change metadata or select replacement contents. An omitted lifetime
+  preserves the existing expiration; a supplied lifetime starts from the update.
+- Confirmed deletion and sign-out.
+- CLI-password rotation with the current browser password and confirmation of
+  the new CLI password. The two passwords must remain different.
+
+JavaScript is required for login and mutations. It sends raw file bodies to
+`PUT /admin/files` or `PUT /admin/files/{id}` and uses PATCH/DELETE for other file
+operations, reusing the CLI storage logic and limits. No multipart parser or
+frontend build is needed. After a long upload, the session is rechecked before
+publication; a session that expired or was revoked during transfer is rejected.
+Operations already authorized and committing can finish during a concurrent
+logout/reset, as can active downloads.
+
+Sessions use independent random 256-bit bearer tokens; only SHA-256 hashes and
+timestamps are stored in SQLite. Cookies are host-only, `Secure`, `HttpOnly`,
+`SameSite=Strict`, and use the `__Host-` prefix. A session expires after one hour
+without authenticated activity or twelve hours from login, whichever comes
+first. Fixed assets do not extend idle time. Sessions survive server restarts;
+logout revokes the current session and local browser-password reset revokes all.
+At most 32 sessions are retained; a further successful login revokes the oldest.
+Expired records are pruned on successful login, keeping persistent state bounded.
+
+All browser mutations require the configured Origin and a session-bound CSRF
+header before reading the body. Login uses a separate signed, ten-minute
+challenge and HttpOnly cookie; restarting the server invalidates open login
+pages, so reload them. Authentication JSON bodies are limited to 8 KiB. Passwords
+are never accepted in query parameters. Login and CLI-password rotation share
+the per-IP authentication budget and Argon2 concurrency limit with CLI Basic
+checks. CSRF protection follows the
+[OWASP guidance on custom headers and Origin checks](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html).
 
 ## HEAD and resumable downloads
 
@@ -280,11 +330,13 @@ the complete viewer's headers, including the rendered page's Content-Length.
 
 Anonymous GET/HEAD requests share a per-IP token bucket, including missing-file
 and invalid-path probes. `anonymous_rate` defaults to one request per second and
-`anonymous_burst` to ten. Verified CLI authentication bypasses this read limit;
+`anonymous_burst` to ten. Verified CLI authentication or a live browser session
+bypasses this read limit;
 merely supplying an Authorization header does not. Incorrect supplied credentials
 return `401`, even on otherwise public reads.
 
-CLI authentication has a separate bucket. `auth_failures_per_minute` defaults to
+Authentication has a separate bucket shared by CLI checks, browser login, and
+CLI-password rotation. `auth_failures_per_minute` defaults to
 five and controls both burst size and sustained refill. Each check reserves a
 token before password hashing; success or backend failure refunds it, while
 missing, malformed, or incorrect credentials consume it. After five failures,
@@ -295,8 +347,8 @@ Throttled requests return `429`, `Retry-After` in whole seconds, and `no-store`.
 Each bucket map tracks at most `rate_limit_max_ips` addresses (default 10000).
 Idle entries expire only after their budget can fully refill; active blocked
 entries are not evicted to admit new addresses. At capacity, new addresses are
-temporarily rejected. State resets on restart. Browser-login throttling will be
-integrated when browser sessions are introduced in milestone 5.
+temporarily rejected. Rate-limit state resets on restart; stored sessions retain
+their original deadlines.
 
 By default, client identity comes from the socket peer and all forwarded headers
 are ignored. Behind your single reverse proxy, set `trusted_proxies` to its exact
@@ -337,6 +389,13 @@ escaping, bounded text reads, MIME spoofing, media ranges, negotiation, asset
 throttle exemptions, and error responses. If Chrome/Chromium is installed, an
 optional headless smoke test renders the viewer with an isolated project-local
 profile and checks that its share script loads. It is skipped otherwise.
+With Chrome/Chromium, Node 22+, and OpenSSL installed, a second optional browser
+test exercises login, upload, metadata editing, replacement, CLI-password
+rotation, deletion, and logout over loopback HTTPS. It uses a synthetic test
+certificate, isolated profile, and Node's built-in WebSocket; no npm packages
+are needed. Session tests cover idle/absolute expiry, restart persistence,
+reset races, CSRF rejection before body reads, bounded state, and migration
+rollback. These optional tools are test tools, not application dependencies.
 Integration tests require Linux pseudo-terminals,
 loopback sockets, and curl. A restrictive sandbox may need to permit those
 capabilities to run the tests.

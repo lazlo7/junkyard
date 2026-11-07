@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Sign in · Junkyard{% endblock %}
+{% block head %}<meta name="csrf-token" content="{{ csrf }}">{% endblock %}
+{% block content %}
+  <h1>Administration</h1>
+  <p>Sign in with your browser password.</p>
+  <noscript><p class="notice">JavaScript is required to sign in and manage files.</p></noscript>
+  <form id="login-form" method="post" action="/admin/login" class="admin-form">
+    <label for="password">Browser password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
+    <button type="submit">Sign in</button>
+    <p class="form-status" role="status" aria-live="polite"></p>
+  </form>
+  <script src="/assets/admin.js" defer></script>
+{% endblock %}
+{% block footer %}Private administration. CLI and browser passwords are separate.{% endblock %}

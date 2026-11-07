@@ -23,3 +23,15 @@ dt { opacity: .75; }
 dd { margin: 0; overflow-wrap: anywhere; }
 footer { margin-top: 2rem; font-size: .875rem; opacity: .75; }
 @media (max-width: 32rem) { body { padding: 1rem; } dl { display: block; } dd { margin-bottom: .75rem; } }
+.admin-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.admin-form { max-width: 38rem; display: grid; gap: .5rem; margin: 1rem 0; }
+.admin-form button { justify-self: start; margin-top: .5rem; }
+.admin-form .checkbox { display: flex; align-items: center; gap: .5rem; }
+.checkbox input { width: auto; }
+.form-status { margin: .25rem 0; overflow-wrap: anywhere; }
+.file-entry { border-top: 1px solid #8886; padding: 1rem 0; }
+.file-entry h3 { overflow-wrap: anywhere; }
+.file-entry p { overflow-wrap: anywhere; }
+details { margin: 1rem 0; }
+summary { cursor: pointer; }
+button:disabled { cursor: wait; opacity: .6; }

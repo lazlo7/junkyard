@@ -6,6 +6,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 
 from junkyard.config import Settings
+from junkyard.browser_auth import BrowserAuth, SESSION_COOKIE, cookie
 from junkyard.database import StoreError
 from junkyard.presentation import ASSETS, error_response
 from junkyard.rate_limits import RateLimited, RequestLimits
@@ -20,10 +21,12 @@ def normalized_ip(value: str):
 
 
 class RequestProtection:
-    def __init__(self, app, *, settings: Settings, authenticator: CLIAuthenticator, limits: RequestLimits):
+    def __init__(self, app, *, settings: Settings, authenticator: CLIAuthenticator, limits: RequestLimits,
+                 browser_auth: BrowserAuth):
         self.app = app
         self.authenticator = authenticator
         self.limits = limits
+        self.browser_auth = browser_auth
         self.trusted = tuple(ipaddress.ip_network(value) for value in settings.trusted_proxies)
 
     def client_ip(self, request: Request) -> str:
@@ -53,14 +56,19 @@ class RequestProtection:
         request = Request(scope)
         state = scope.setdefault("state", {})
         state["cli_authenticated"] = False
+        state["browser_session"] = None
         try:
             client_ip = self.client_ip(request)
         except ValueError:
             await self._respond(request, receive, send, 400, "Invalid proxy client address")
             return
         state["client_ip"] = client_ip
-        required = request.method in ("PUT", "PATCH", "DELETE") or scope["path"] == "/auth/check"
+        admin = scope["path"] == "/admin" or scope["path"].startswith("/admin/")
+        required = not admin and (request.method in ("PUT", "PATCH", "DELETE") or scope["path"] == "/auth/check")
         authorization = request.headers.getlist("authorization")
+        if admin and authorization:
+            await self._respond(request, receive, send, 401, "Use the browser login for administration")
+            return
         try:
             if required or authorization:
                 ticket = self.limits.authentication.take(client_ip, reserve=True)
@@ -83,7 +91,14 @@ class RequestProtection:
                 if failure is not None:
                     await self._respond(request, receive, send, *failure)
                     return
-            if request.method in ("GET", "HEAD") and not state["cli_authenticated"] and scope["path"] not in ASSETS:
+            if (admin or request.method in ("GET", "HEAD")) and scope["path"] not in ASSETS and not state["cli_authenticated"]:
+                try:
+                    state["browser_session"] = await run_in_threadpool(self.browser_auth.resolve, cookie(request, SESSION_COOKIE))
+                except StoreError:
+                    await self._respond(request, receive, send, 503, "Authentication unavailable", {"Retry-After": "1"})
+                    return
+            if (request.method in ("GET", "HEAD") and not state["cli_authenticated"]
+                and state["browser_session"] is None and scope["path"] not in ASSETS):
                 # Only fixed application assets are exempt; arbitrary paths and
                 # file/media requests continue consuming the same IP budget.
                 self.limits.anonymous.take(client_ip)

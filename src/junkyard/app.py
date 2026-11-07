@@ -7,6 +7,8 @@ from fastapi import Depends, FastAPI, Response
 from starlette.concurrency import run_in_threadpool
 
 from junkyard.config import Settings
+from junkyard.admin_routes import install_admin_routes
+from junkyard.browser_auth import BrowserAuth
 from junkyard.database import Database
 from junkyard.file_routes import install_file_routes
 from junkyard.files import FileStore
@@ -38,16 +40,19 @@ def create_app(settings: Settings) -> FastAPI:
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.cli_authenticator = CLIAuthenticator(database)
+    app.state.browser_auth = BrowserAuth(database, app.state.cli_authenticator)
     app.state.files = files
     app.state.limits = RequestLimits(settings)
     app.add_middleware(RequestProtection, settings=settings,
-                       authenticator=app.state.cli_authenticator, limits=app.state.limits)
+                       authenticator=app.state.cli_authenticator, limits=app.state.limits,
+                       browser_auth=app.state.browser_auth)
 
     @app.get("/auth/check", dependencies=[Depends(require_cli)], status_code=204)
     def check_authentication() -> Response:
         return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
     install_assets(app)
+    install_admin_routes(app)
     install_file_routes(app)
     return app
 

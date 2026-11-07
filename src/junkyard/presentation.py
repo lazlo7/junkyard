@@ -20,10 +20,11 @@ PAGE_HEADERS = {
 _environment = Environment(loader=FileSystemLoader(Path(__file__).parent / "templates"),
                            autoescape=True, undefined=StrictUndefined, auto_reload=False)
 # Compile fixed templates once, keeping filesystem I/O out of request handling.
-_templates = {name: _environment.get_template(name + ".html") for name in ("viewer", "error")}
+_templates = {name: _environment.get_template(name + ".html") for name in ("viewer", "error", "login", "admin")}
 ASSETS = {
     "/assets/viewer.css": ((Path(__file__).parent / "static/viewer.css").read_bytes(), "text/css"),
     "/assets/viewer.js": ((Path(__file__).parent / "static/viewer.js").read_bytes(), "text/javascript"),
+    "/assets/admin.js": ((Path(__file__).parent / "static/admin.js").read_bytes(), "text/javascript"),
 }
 
 
@@ -82,6 +83,12 @@ def viewer_response(request: Request, record, preview, public_url: str) -> Respo
         expires=timestamp(record.expires_at),
     )
     return without_head_body(request, HTMLResponse(body, headers=PAGE_HEADERS))
+
+
+def admin_response(request: Request, template: str, **context) -> Response:
+    body = _templates[template].render(timestamp=timestamp, **context)
+    headers = {**PAGE_HEADERS, "Content-Security-Policy": PAGE_HEADERS["Content-Security-Policy"] + "; connect-src 'self'"}
+    return without_head_body(request, HTMLResponse(body, headers=headers))
 
 
 def install_assets(app) -> None:

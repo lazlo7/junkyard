@@ -1,6 +1,6 @@
 # Junkyard implementation plan
 
-Status: approved by the project owner on 2026-11-07. Milestones 1–3 are complete. Milestone 4 is implemented and awaiting review; later milestones have not started.
+Status: approved by the project owner on 2026-11-07. Milestones 1–4 are complete. Milestone 5 is implemented and awaiting review; milestone 6 has not started.
 
 The behavior, interfaces, security policies, and operational defaults are defined in [architecture.md](architecture.md), based on [requirements.md](requirements.md).
 
@@ -113,7 +113,7 @@ Implementation notes:
 
 ## Milestone 4: Public viewer
 
-Status: implemented and awaiting review; all 232 tests pass, including real
+Status: complete and accepted for continuation to milestone 5; all 232 tests passed, including real
 Uvicorn/curl negotiation and the isolated Chrome smoke test. Wheel and source
 distribution contents were verified, including templates and assets. The
 existing Starlette/httpx deprecation warning remains.
@@ -152,6 +152,10 @@ Implementation notes:
 
 ## Milestone 5: Browser administration
 
+Status: implemented and awaiting review; all 308 tests pass, including the full
+admin workflow in Chrome over loopback HTTPS. Wheel and source distribution
+contents were verified. The existing Starlette/httpx deprecation warning remains.
+
 Deliver sessions, CSRF protection, file management, storage display, and CLI-password rotation.
 
 Acceptance criteria:
@@ -162,6 +166,31 @@ Acceptance criteria:
 - CLI-password rotation invalidates the old CLI password without changing browser credentials.
 - A complete browser upload, replacement, metadata-edit, and deletion workflow works.
 - The admin list is paginated and storage information reflects the quota policy.
+
+Implementation notes:
+
+- Schema 3 adds hashed session records. Explicit transactional migrations from
+  schema 1 or 2 preserve credentials and files; initialization creates schema 3.
+- Opaque 256-bit session tokens use host-only Secure/HttpOnly/SameSite=Strict
+  cookies, one-hour idle and twelve-hour absolute deadlines, and a 32-session
+  cap. Logout revokes one session; browser-password reset revokes all. Successful
+  login prunes expired records and always issues a fresh token.
+- Origin and session-bound CSRF checks precede mutation body reads. Login uses
+  a separate signed, ten-minute challenge, invalidated on server restart.
+  Authentication bodies are bounded JSON; all Argon2 work and failure budgets
+  are shared with CLI checks.
+- The dashboard lists 25 live files per page and reports quota usage under the
+  storage lock. Raw uploads, replacement, metadata edits, and deletion reuse
+  existing file-operation code. Long uploads recheck session validity before
+  publishing. Browser sessions never authorize CLI mutation routes.
+- Password rotation re-verifies the browser password and validates session and
+  credential versions transactionally. Concurrent resets cannot issue stale
+  sessions or overwrite newer CLI credentials.
+- Templates and one new fixed script provide the admin interface without a
+  frontend build or new dependencies. JavaScript is required for mutations.
+- Tests cover migration rollback, expiration, revocation, concurrent reset,
+  CSRF/origin rejection before body consumption, pagination, quota accounting,
+  and the full admin workflow in an isolated Chrome session over test HTTPS.
 
 ## Milestone 6: Deployment and release checks
 

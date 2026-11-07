@@ -1,6 +1,6 @@
 # Junkyard architecture
 
-Status: approved by the project owner on 2026-11-07. Milestones 1–3 are complete. Milestone 4 is implemented and awaiting review; later milestones have not started.
+Status: approved by the project owner on 2026-11-07. Milestones 1–4 are complete. Milestone 5 is implemented and awaiting review; milestone 6 has not started.
 
 This design builds on [requirements.md](requirements.md). Development milestones and acceptance criteria are in [implementation-plan.md](implementation-plan.md).
 
@@ -66,7 +66,9 @@ immediate best-effort removal of unreferenced blobs after normal operations, and
 quota accounting for all staged and stored content. Milestone 3 adds coordinated
 startup and periodic reconciliation. A filesystem lock enforces the single-worker
 boundary. Existing credential-only databases upgrade through the explicit local
-`junkyard migrate` command; new databases use schema version 2.
+`junkyard migrate` command. Milestone 5 adds hashed browser sessions in schema
+version 3; both schema 1 and 2 upgrade explicitly without changing files or
+credentials. The server refuses earlier schemas until migration.
 
 A filesystem operation and a database transaction do not commit atomically. Publishing immutable blobs before metadata, followed by reconciliation, gives this boundary an explicit failure model. The design accepts temporary extra disk usage to make interrupted uploads and replacements safe.
 
@@ -164,6 +166,33 @@ attachments, including on `/raw`. Byte responses add a sandbox CSP, while viewer
 pages allow only local scripts, styles, images, and media and prohibit framing.
 Canonical share links remain selectable if JavaScript or clipboard access fails.
 
+Milestone 5 implements `/admin/login` and a paginated `/admin/` dashboard with
+25 live files per page. Its raw-body upload and replacement routes call the same
+streaming handler as CLI uploads; metadata edits and deletion share FileStore
+operations. The storage summary takes a snapshot under the quota lock and counts
+all charged content. Forms use one additional fixed JavaScript asset, with
+`connect-src 'self'` allowed only on admin pages. No new dependency is introduced.
+
+Browser sessions use 256-bit random tokens, SHA-256 token hashes in SQLite,
+credential versions, idle timestamps, and fixed absolute deadlines. They survive
+restart. Logout deletes the current record; local browser-password reset changes
+the version and deletes all sessions transactionally. Login always issues a new
+token. Successful login prunes stale records and limits retained sessions to 32,
+revoking the oldest if needed. Assets do not renew idle time. Long browser uploads
+recheck session validity before publication; already authorized operations may
+finish during concurrent logout/reset.
+
+Every browser mutation checks the configured canonical Origin and a CSRF header
+derived with HMAC from the session secret before reading its body. The secret is
+never embedded in HTML. Pre-login requests use a separate ten-minute signed
+challenge cookie and bound CSRF value; this challenge is invalidated on restart.
+Both cookies use `__Host-`, Secure, HttpOnly, SameSite=Strict, and Path=/ without
+a Domain attribute. Browser credentials cannot authorize CLI routes, and Basic
+credentials cannot authorize admin routes. Password bodies are bounded JSON.
+CLI-password rotation verifies the browser password again and checks the session
+and credential versions in the update transaction, preventing a reset during
+verification from issuing a session or overwriting newer CLI credentials.
+
 ## Security and operational defaults
 
 The following are approved defaults, configurable where appropriate:
@@ -184,9 +213,12 @@ default to one request per second with a burst of ten, including unknown-path
 probes. Valid CLI authentication bypasses that read limit. Failed CLI
 authentication defaults to five attempts per minute with a burst of five;
 checks reserve a token before hashing and refund it on success or backend error.
-Throttle responses use `429` with `Retry-After`. Browser-login throttling will be
-integrated with milestone 5. Milestone 4 exempts only the two exact packaged asset
-paths from the anonymous read budget; viewer and media requests remain limited.
+Throttle responses use `429` with `Retry-After`. Milestone 5 shares this
+authentication budget and the two-operation Argon2 semaphore with browser login
+and CLI-password rotation, preventing bypass by switching authentication paths.
+Live browser sessions also bypass anonymous read limits. Only the three exact
+packaged asset paths are exempt without authentication; anonymous viewer and
+media requests remain limited.
 
 Each limiter tracks up to 10000 IPs by default. Only idle, replenished entries
 can be evicted; at capacity, new IPs are temporarily rejected. Limits use a

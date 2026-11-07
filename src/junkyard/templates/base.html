@@ -6,10 +6,11 @@
   <meta name="robots" content="noindex, nofollow, noarchive">
   <title>{% block title %}Junkyard{% endblock %}</title>
   <link rel="stylesheet" href="/assets/viewer.css">
+  {% block head %}{% endblock %}
 </head>
 <body>
   <header class="brand">Junkyard <span>Shared files</span></header>
   <main>{% block content %}{% endblock %}</main>
-  <footer>Anyone with this link can access the file.</footer>
+  <footer>{% block footer %}Anyone with this link can access the file.{% endblock %}</footer>
 </body>
 </html>

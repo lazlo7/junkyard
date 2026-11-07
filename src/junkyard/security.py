@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+from contextlib import contextmanager
 import secrets
 import threading
 
@@ -63,10 +64,18 @@ class CLIAuthenticator:
         # Bound the memory cost of simultaneous Argon2 verifications (~128 MiB).
         self._slots = threading.BoundedSemaphore(2)
 
-    def verify(self, username: str, password: str) -> bool:
+    @contextmanager
+    def password_work(self):
+        """Share the Argon2 memory budget across CLI and browser operations."""
         if not self._slots.acquire(blocking=False):
             raise AuthenticationBusy
         try:
+            yield
+        finally:
+            self._slots.release()
+
+    def verify(self, username: str, password: str) -> bool:
+        with self.password_work():
             stored_hash = self.database.password_hash("cli")
             try:
                 correct_password = PASSWORD_HASHER.verify(stored_hash, password)
@@ -79,6 +88,4 @@ class CLIAuthenticator:
             return correct_password and correct_username and secrets.compare_digest(
                 stored_hash, self.database.password_hash("cli")
             )
-        finally:
-            self._slots.release()
 

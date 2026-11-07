@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Administration · Junkyard{% endblock %}
+{% block head %}<meta name="csrf-token" content="{{ csrf }}">{% endblock %}
+{% block content %}
+  <div class="admin-heading"><h1>Administration</h1><button id="logout" type="button">Sign out</button></div>
+  <p id="admin-status" role="status" aria-live="polite"></p>
+  <noscript><p class="notice">JavaScript is required to manage files. File links remain available below.</p></noscript>
+  <section aria-labelledby="storage-title">
+    <h2 id="storage-title">Storage</h2>
+    <p><strong>{{ "{:,}".format(used_bytes) }}</strong> of {{ "{:,}".format(quota_bytes) }} bytes used · {{ total }} live files</p>
+    <p>Usage includes uploads in progress and older blobs retained for active downloads.
+       Maximum file size: {{ "{:,}".format(max_file_bytes) }} bytes.</p>
+  </section>
+  <section aria-labelledby="upload-title">
+    <h2 id="upload-title">Upload a file</h2>
+    <form id="upload-form" class="admin-form" method="post" action="/admin/files">
+      <label for="upload-file">File</label><input id="upload-file" name="file" type="file" required>
+      <label for="upload-name">Filename (optional)</label><input id="upload-name" name="name" type="text" maxlength="255" placeholder="Use the selected file’s name">
+      <label for="upload-expiration">Lifetime (optional)</label><input id="upload-expiration" name="e" type="text" placeholder="30d by default; e.g. 7d, 12h, or 0 for never">
+      <label class="checkbox"><input name="secure" type="checkbox"> Use a long link</label>
+      <button type="submit">Upload</button>
+      <p class="form-status" role="status" aria-live="polite"></p>
+    </form>
+  </section>
+  <section aria-labelledby="files-title">
+    <h2 id="files-title">Files</h2>
+    <p>Page {{ page }} of {{ pages }} · up to 25 files per page</p>
+    {% for file in files %}
+    <article class="file-entry">
+      <h3><a href="/{{ file.id }}">{{ file.name }}</a></h3>
+      <p><code>{{ file.id }}</code> · {{ "{:,}".format(file.size) }} bytes · Expires: {{ timestamp(file.expires_at) }}</p>
+      <p>Uploaded: {{ timestamp(file.created_at) }} · Modified: {{ timestamp(file.modified_at) }}</p>
+      <a href="/{{ file.id }}/download" download>Download</a>
+      <details><summary>Edit or replace</summary>
+        <form class="admin-form edit-form" data-id="{{ file.id }}" method="post" action="/admin/files/{{ file.id }}">
+          <label for="name-{{ file.id }}">Filename</label><input id="name-{{ file.id }}" name="name" type="text" value="{{ file.name }}" required maxlength="255">
+          <label for="expiry-{{ file.id }}">New lifetime (optional)</label><input id="expiry-{{ file.id }}" name="e" type="text" placeholder="Keep existing expiry; e.g. 7d, 12h, or 0 for never">
+          <label for="replace-{{ file.id }}">Replace contents (optional)</label><input id="replace-{{ file.id }}" name="file" type="file">
+          <button type="submit">Save changes</button>
+          <p class="form-status" role="status" aria-live="polite"></p>
+        </form>
+      </details>
+      <button type="button" class="delete-file" data-id="{{ file.id }}">Delete file</button>
+    </article>
+    {% else %}<p>No files on this page.</p>{% endfor %}
+    <nav aria-label="File pages" class="actions">
+      {% if page > 1 %}<a href="/admin/?page={{ page - 1 }}">Previous page</a>{% endif %}
+      {% if page < pages %}<a href="/admin/?page={{ page + 1 }}">Next page</a>{% endif %}
+    </nav>
+  </section>
+  <section aria-labelledby="password-title">
+    <h2 id="password-title">Change CLI password</h2>
+    <p>The old CLI password will stop working immediately. Your browser password and sessions stay unchanged.</p>
+    <form id="password-form" class="admin-form" method="post" action="/admin/cli-password">
+      <label for="browser-password">Current browser password</label><input id="browser-password" name="browser_password" type="password" autocomplete="current-password" required maxlength="1024">
+      <label for="new-password">New CLI password</label><input id="new-password" name="new_password" type="password" autocomplete="new-password" required minlength="12" maxlength="1024">
+      <label for="confirmation">Confirm new CLI password</label><input id="confirmation" name="confirmation" type="password" autocomplete="new-password" required minlength="12" maxlength="1024">
+      <button type="submit">Change CLI password</button>
+      <p class="form-status" role="status" aria-live="polite"></p>
+    </form>
+  </section>
+  <script src="/assets/admin.js" defer></script>
+{% endblock %}
+{% block footer %}Private administration. Sessions expire after one hour idle or twelve hours total.{% endblock %}
