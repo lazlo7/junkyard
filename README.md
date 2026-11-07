@@ -4,10 +4,10 @@ A personal, self-hosted, CLI-centric file server. The approved design is in
 [docs/architecture.md](docs/architecture.md), with milestones in
 [docs/implementation-plan.md](docs/implementation-plan.md).
 
-Milestones 1–2 provide configuration, private SQLite storage, password
-administration, Basic authentication, and streaming CLI file operations.
-Scheduled cleanup/recovery, HEAD/range handling, request throttling, browser
-pages, and sessions belong to later milestones.
+Milestones 1–3 provide configuration, private SQLite storage, password
+administration, Basic authentication, streaming CLI file operations, expiration
+cleanup and recovery, HEAD/range downloads, and request throttling. Browser pages
+and sessions belong to later milestones.
 
 ## Development setup
 
@@ -35,6 +35,10 @@ back up the data directory, then run:
 The upgrade adds file metadata in a transaction and preserves both credentials.
 Running it again is harmless. New `init` commands create the current schema
 directly; the server refuses an old schema until it is migrated.
+
+Milestone 3 keeps schema version 2, so milestone 2 databases need no migration.
+Startup recovery now removes abandoned staging files and unreferenced blobs
+after verifying all referenced content. It also processes expired files.
 
 The runtime dependencies are FastAPI, Uvicorn, and `argon2-cffi`. Python's standard
 library supplies configuration parsing and SQLite access. pytest and httpx are
@@ -84,9 +88,10 @@ For an alternative configuration file, put the global option before the command:
 
 The server refuses to start without both initialized credentials. It runs one
 worker, enforced by a storage lock, and binds to `127.0.0.1:8000` by default; `::1` is also supported. HTTP access
-logging and proxy-header trust are disabled. Public exposure requires the HTTPS
-reverse proxy described by the architecture; deployment configuration and trusted
-proxy integration are planned for milestone 6.
+logging and Uvicorn's implicit proxy-header handling are disabled. The application
+only trusts client-address headers from explicitly configured proxy peers (see
+below). Public exposure requires the HTTPS reverse proxy described by the
+architecture; complete deployment examples remain milestone 6.
 
 The read-only `GET /auth/check` endpoint returns `204` for the fixed username
 `admin` and the CLI password. It returns a generic `401` challenge for missing,
@@ -95,7 +100,8 @@ authorize it. A protected request returns `503` if the credential store is
 unavailable or both password-verification slots are occupied. Responses disable
 caching. Public setup and generated API documentation endpoints are disabled.
 
-For a local smoke check, curl prompts for the CLI password:
+For a local smoke check with the default `trusted_proxies = []`, curl prompts for
+the CLI password:
 
 ```sh
 curl -q -i -u admin http://127.0.0.1:8000/auth/check
@@ -162,8 +168,8 @@ JSON with a `detail` message.
   Inline previews and browser-versus-curl negotiation arrive in milestone 4.
 
 Files that have expired are inaccessible and cannot be revived with an update.
-Scheduled expiration deletion and recovery of crash leftovers arrive in
-milestone 3. No public listing is exposed. Short links are unlisted public links;
+New reads fail at the deadline; already-started downloads can finish. No public
+listing is exposed. Short links are unlisted public links;
 use explicit long links for stronger resistance to guessing.
 
 ## Storage and concurrent transfers
@@ -188,9 +194,79 @@ space during normal operation.
 
 Publication syncs the file and containing directories before the database commit.
 If publication succeeds but a commit fails or its result is uncertain, the blob
-is retained and still charged to quota. Startup counts these retained files but
-does not delete them yet; reconciliation is milestone 3. Missing or damaged
-referenced blobs fail closed. Do not manually modify storage while serving files.
+is retained and still charged to quota. Startup verifies every referenced blob
+before deleting anything. Missing, wrong-sized, linked, or unexpectedly named
+storage entries fail closed without discarding metadata. Valid startup recovery
+removes abandoned staging files and unreferenced blobs, preserving committed data.
+
+Every `cleanup_interval_seconds` (default 60), cleanup expires metadata and
+reclaims unreferenced content. The same operation lock protects active uploads,
+download pins, and quota reservations. Failed deletions stay charged and are
+retried; cleanup errors are logged without file paths. Shutdown waits for any
+running cleanup before releasing the process lock. Do not manually modify
+storage while serving files.
+
+## HEAD and resumable downloads
+
+All three download routes support HEAD and single byte ranges:
+
+```sh
+curl -I https://files.example.com/ID
+curl --range 0-1023 https://files.example.com/ID -o first-kib.bin
+curl -C - https://files.example.com/ID -o partially-downloaded.bin
+```
+
+HEAD returns the same headers as a full GET, without its body. A satisfiable
+single range returns `206` with `Content-Range`; malformed or unsatisfiable byte
+ranges return `416` with the full size. Open-ended and suffix ranges work.
+Multi-range requests and unknown range units fall back to a full `200` response;
+Range is ignored on HEAD. This follows the selective range support permitted by
+[RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#name-range).
+
+Responses include a strong `ETag` and `Last-Modified`. Send the saved ETag as
+`If-Range` when resuming a potentially replaced file: a matching tag allows the
+range; a changed tag returns the complete new file. Weak tags and date-based
+`If-Range` values also return the full file because multiple changes can occur
+within one second. `curl -C -` alone does not check that a file is unchanged.
+Responses remain `Cache-Control: no-store`.
+
+## Request limits and trusted proxies
+
+Anonymous GET/HEAD requests share a per-IP token bucket, including missing-file
+and invalid-path probes. `anonymous_rate` defaults to one request per second and
+`anonymous_burst` to ten. Verified CLI authentication bypasses this read limit;
+merely supplying an Authorization header does not. Incorrect supplied credentials
+return `401`, even on otherwise public reads.
+
+CLI authentication has a separate bucket. `auth_failures_per_minute` defaults to
+five and controls both burst size and sustained refill. Each check reserves a
+token before password hashing; success or backend failure refunds it, while
+missing, malformed, or incorrect credentials consume it. After five failures,
+the next token arrives in 12 seconds. Concurrent checks cannot exceed the
+available budget; Argon2 verification retains its separate two-operation limit.
+
+Throttled requests return `429`, `Retry-After` in whole seconds, and `no-store`.
+Each bucket map tracks at most `rate_limit_max_ips` addresses (default 10000).
+Idle entries expire only after their budget can fully refill; active blocked
+entries are not evicted to admit new addresses. At capacity, new addresses are
+temporarily rejected. State resets on restart. Browser-login throttling will be
+integrated when browser sessions are introduced in milestone 5.
+
+By default, client identity comes from the socket peer and all forwarded headers
+are ignored. Behind your single reverse proxy, set `trusted_proxies` to its exact
+IP addresses or trusted networks, for example `["127.0.0.1", "::1"]`. The proxy
+must **overwrite** `X-Forwarded-For` with exactly one client IP; for Nginx:
+
+```nginx
+proxy_set_header X-Forwarded-For $remote_addr;
+```
+
+Requests from a trusted proxy with missing, invalid, repeated, or chained values
+are rejected with `400`. `Forwarded` and `X-Real-IP` are not used. IPv4-mapped IPv6
+client addresses are normalized to the same IPv4 identity. With proxy trust
+enabled, perform smoke checks through the HTTPS proxy; a direct request from a
+trusted loopback peer also needs its required client-address header. Continue to
+use `junkyard serve`, which disables Uvicorn's separate proxy-header processing.
 
 ## Tests and packaging
 
@@ -206,9 +282,11 @@ They cover configuration failures, private filesystem permissions, initializatio
 and migration failures, credential separation, malformed Basic headers, hidden
 terminal prompts, file CRUD, traversal/header injection attempts, identifier
 collisions, concurrent updates, quota races, cancellation, partial disk writes,
-and failures around publication/commit. A real Uvicorn/curl exchange covers the
-file lifecycle, filename handling, and a chunked stdin upload using a password
-file. Integration tests require Linux pseudo-terminals,
+and failures around publication/commit. Fake-clock checks cover expiration and
+rate limits; recovery checks cover referenced blobs, active transfers, and failed
+cleanup. A real Uvicorn/curl exchange covers the file lifecycle, HEAD, ranges,
+resuming a download, and a chunked stdin upload using a password file. A process
+crash test verifies cleanup after an interrupted upload. Integration tests require Linux pseudo-terminals,
 loopback sockets, and curl. A restrictive sandbox may need to permit those
 capabilities to run the tests.
 

@@ -232,12 +232,12 @@ def test_publication_failure_never_deletes_a_referenced_blob(store, monkeypatch,
     assert read(store, original.id) == (b"new" if boundary == "after_commit" else b"original")
     assert not list(store.staging.iterdir())
     assert store.used_bytes == (8 if boundary == "before_publish" else 11)
-    # Restart must count retained orphans without deleting any referenced bytes.
+    # Recovery removes orphans while preserving the outcome of the DB commit.
     store.close()
     reopened = FileStore(store.database, store.settings)
     reopened.start()
     try:
-        assert reopened.used_bytes == store.used_bytes
+        assert reopened.used_bytes == (3 if boundary == "after_commit" else 8)
         assert read(reopened, original.id) == (b"new" if boundary == "after_commit" else b"original")
     finally:
         reopened.close()

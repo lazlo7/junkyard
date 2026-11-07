@@ -6,9 +6,10 @@ from urllib.parse import parse_qsl, unquote_to_bytes
 
 
 class FileError(Exception):
-    def __init__(self, status: int, detail: str):
+    def __init__(self, status: int, detail: str, headers: dict[str, str] | None = None):
         self.status = status
         self.detail = detail
+        self.headers = headers or {}
         super().__init__(detail)
 
 

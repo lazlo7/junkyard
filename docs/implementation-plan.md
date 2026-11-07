@@ -1,6 +1,6 @@
 # Junkyard implementation plan
 
-Status: approved by the project owner on 2026-11-07. Milestone 1 is committed. Milestone 2 is implemented and awaiting review; later milestones have not started.
+Status: approved by the project owner on 2026-11-07. Milestones 1–2 are complete. Milestone 3 is implemented and awaiting review; later milestones have not started.
 
 The behavior, interfaces, security policies, and operational defaults are defined in [architecture.md](architecture.md), based on [requirements.md](requirements.md).
 
@@ -35,7 +35,7 @@ Implementation notes:
 - `junkyard init`, `junkyard passwd cli|browser`, and `junkyard serve` commands.
 - A read-only `/auth/check` endpoint tests Basic authentication independently of
   future file operations. Expensive hash checks run outside the event loop with
-  at most two concurrent verifications; rate-based throttling remains milestone 3.
+  at most two concurrent verifications; rate-based throttling is added in milestone 3.
 - Passwords require hidden confirmation, at least 12 printable characters, and
   at most 1024 UTF-8 bytes. CLI and browser passwords must differ.
 - Automated checks include real terminal echo suppression and Uvicorn/curl
@@ -43,8 +43,8 @@ Implementation notes:
 
 ## Milestone 2: Durable CLI file operations
 
-Status: implemented; 126 tests pass, including the Uvicorn/curl integration tests.
-Awaiting review before further work. The existing Starlette/httpx test-client
+Status: complete; 126 tests passed at this milestone, including Uvicorn/curl integration tests.
+Accepted for continuation to milestone 3. The existing Starlette/httpx test-client
 deprecation warning remains; runtime dependencies are unchanged.
 
 Deliver streaming creation, read, replacement, metadata edits, deletion, short/long IDs, and quotas.
@@ -70,11 +70,15 @@ Implementation notes:
 - Interrupted requests remove staging files during normal operation. Uncertain
   commits retain published blobs for recovery rather than risk deleting live data.
 - Expiration is stored and checked on access; periodic cleanup, full restart
-  reconciliation, HEAD, ranges, and request throttling remain milestone 3.
+  reconciliation, HEAD, ranges, and request throttling are added in milestone 3.
 - Integration tests verify curl's filename behavior: query-bearing upload URLs
   need an explicit path filename or `name=` to preserve the original basename.
 
 ## Milestone 3: Lifecycle and HTTP behavior
+
+Status: implemented and awaiting review; all 184 tests pass, including Uvicorn/curl
+integration and process-crash recovery tests. The existing Starlette/httpx
+deprecation warning remains.
 
 Deliver expiration, cleanup, recovery, HEAD, range downloads, and throttling.
 
@@ -87,6 +91,25 @@ Acceptance criteria:
 - HEAD and range responses are correct, including invalid ranges.
 - Forged proxy headers cannot bypass client-IP handling or rate limits.
 - Anonymous throttling, authentication throttling, and `Retry-After` behavior are tested.
+
+Implementation notes:
+
+- Startup validates referenced content before deleting expired metadata or crash
+  leftovers. Periodic cleanup shares the storage lock and protects active uploads,
+  pinned downloads, and quota reservations; failed unlinks are retried.
+- Cleanup defaults to 60 seconds and finishes any running work before shutdown.
+  Injected clocks test exact expiration boundaries without waiting for real deadlines.
+- HEAD and single byte ranges work on all download routes. Strong ETag-based
+  `If-Range` prevents mixing versions during a resumed download; multi-ranges and
+  weak/date validators fall back to a full response.
+- Anonymous reads default to 1 request/second, burst 10; failed CLI authentication
+  defaults to 5/minute, burst 5. Bounded per-IP maps and pre-hash reservations
+  prevent state growth and concurrent failure-budget bypass.
+- Trusted-proxy addresses are explicit; only a single overwritten client IP is
+  accepted. Forged headers from other peers cannot change rate-limit identity.
+- Real HTTP tests cover curl HEAD, range, and resume behavior. A controlled
+  process crash verifies partial-upload cleanup and preservation of committed data.
+- No dependencies or database schema changes are required beyond milestone 2.
 
 ## Milestone 4: Public viewer
 

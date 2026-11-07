@@ -1,6 +1,7 @@
 """Real CLI/terminal/HTTP checks using only temporary project-local credentials."""
 
 import os
+import base64
 import pty
 import select
 import shutil
@@ -130,10 +131,21 @@ def test_uvicorn_and_curl_authentication_and_file_lifecycle(database, config_fil
         assert uploaded["size"] == len(contents)
         file_url = base_url + urlsplit(uploaded["url"]).path
         assert curl(file_url) == contents
+        head = curl("--head", file_url)
+        assert b"accept-ranges: bytes" in head.lower()
+        assert f"content-length: {len(contents)}".encode() in head.lower()
+        etag = next(line.split(b":", 1)[1].strip().decode() for line in head.splitlines() if line.lower().startswith(b"etag:"))
+        assert curl("--range", "10-29", file_url) == contents[10:30]
+        assert curl("--range", "10-29", "-H", "If-Range: " + etag, file_url) == contents[10:30]
+        partial = tmp_path / "resumed.bin"
+        partial.write_bytes(contents[:12345])
+        assert curl("--continue-at", "-", "--output", str(partial), file_url) == b""
+        assert partial.read_bytes() == contents
         replacement = b"replacement\x00" * 12000
         # Reading stdin makes curl stream an HTTP/1.1 chunked request.
         assert curl("--http1.1", "-T", "-", file_url, body=replacement) == (uploaded["url"] + "\n").encode()
         assert curl(file_url) == replacement
+        assert curl("--range", "10-29", "-H", "If-Range: " + etag, file_url) == replacement
         changed = json.loads(curl("-H", "Accept: application/json", "-X", "PATCH", file_url + "?name=renamed.bin&e=0"))
         assert changed["filename"] == "renamed.bin"
         assert changed["expires_at"] is None
@@ -150,3 +162,69 @@ def test_uvicorn_and_curl_authentication_and_file_lifecycle(database, config_fil
     assert CLI_PASSWORD not in stdout + stderr
     assert BROWSER_PASSWORD not in stdout + stderr
     assert "test-url-marker" not in stdout + stderr
+
+
+def test_process_crash_recovery_keeps_committed_file_and_removes_partial_upload(database, config_file):
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    with config_file.open("a") as config:
+        config.write(f"bind_port = {port}\n")
+    base_url = f"http://127.0.0.1:{port}"
+
+    def start():
+        process = subprocess.Popen(
+            [sys.executable, "-m", "junkyard", "--config", str(config_file), "serve"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        try:
+            deadline = time.monotonic() + 10
+            with httpx.Client(trust_env=False, timeout=0.5) as client:
+                while True:
+                    assert process.poll() is None, "server failed during startup recovery"
+                    try:
+                        assert client.get(base_url + "/auth/check").status_code == 401
+                        return process
+                    except httpx.TransportError:
+                        assert time.monotonic() < deadline
+                        time.sleep(0.05)
+        except BaseException:
+            process.kill()
+            process.communicate(timeout=5)
+            raise
+
+    process = start()
+    connection = None
+    try:
+        with httpx.Client(trust_env=False, timeout=5) as client:
+            saved = client.put(base_url + "/u/kept", content=b"committed contents", auth=("admin", CLI_PASSWORD))
+            assert saved.status_code == 201
+            path = urlsplit(saved.text.strip()).path
+        connection = socket.create_connection(("127.0.0.1", port), timeout=5)
+        credentials = base64.b64encode(f"admin:{CLI_PASSWORD}".encode()).decode()
+        connection.sendall((f"PUT /u/interrupted HTTP/1.1\r\nHost: localhost\r\n"
+                            f"Authorization: Basic {credentials}\r\nContent-Length: 1000000\r\n\r\n").encode() + b"x" * 65536)
+        deadline = time.monotonic() + 10
+        while not any(file.stat().st_size for file in (database.directory / "staging").iterdir()):
+            assert time.monotonic() < deadline, "upload did not reach staging storage"
+            time.sleep(0.05)
+        process.kill()  # An actual process crash, bypassing request cleanup.
+        process.communicate(timeout=5)
+        connection.close()
+        connection = None
+        assert list((database.directory / "staging").iterdir())
+        process = start()
+        with httpx.Client(trust_env=False, timeout=5) as client:
+            assert client.get(base_url + path).content == b"committed contents"
+        assert not list((database.directory / "staging").iterdir())
+        assert len(list((database.directory / "blobs").iterdir())) == 1
+    finally:
+        if connection is not None:
+            connection.close()
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate(timeout=5)

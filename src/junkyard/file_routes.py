@@ -3,7 +3,6 @@
 from dataclasses import replace
 import errno
 import re
-from urllib.parse import quote
 
 import anyio
 from fastapi import Depends, FastAPI, Request, Response
@@ -14,10 +13,8 @@ from starlette.responses import JSONResponse, PlainTextResponse, StreamingRespon
 from junkyard.database import StoreError
 from junkyard.file_options import FileError, parse_options, validate_encoding, validate_name
 from junkyard.files import CHUNK_SIZE, Download, FileRecord, FileStore
+from junkyard.http_files import PRIVATE_HEADERS, download_headers, select_range
 from junkyard.security import require_cli
-
-PRIVATE_HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"}
-
 
 def expected_length(request: Request) -> int | None:
     values = request.headers.getlist("content-length")
@@ -54,23 +51,26 @@ def mutation_response(request: Request, record: FileRecord, status: int) -> Resp
 
 
 class DownloadResponse(StreamingResponse):
-    def __init__(self, store: FileStore, download: Download):
+    def __init__(self, store: FileStore, download: Download, request: Request | None = None):
         self.store = store
         self.download = download
-        name = download.record.name
-        fallback = name if name.isascii() else "download"
-        fallback = fallback.replace('"', '\\"')
-        headers = {
-            **PRIVATE_HEADERS,
-            "Content-Length": str(download.record.size),
-            "Content-Disposition": f'attachment; filename="{fallback}"; filename*=UTF-8\'\'{quote(name, safe="")}',
-        }
+        headers = download_headers(download.record)
+        start, length, status = select_range(request, download.record.size, headers["ETag"]) if request else (0, download.record.size, 200)
+        if status == 206:
+            headers["Content-Range"] = f"bytes {start}-{start + length - 1}/{download.record.size}"
+            headers["Content-Length"] = str(length)
 
         async def chunks():
-            while chunk := await run_in_threadpool(download.file.read, CHUNK_SIZE):
+            await run_in_threadpool(download.file.seek, start)
+            remaining = length
+            while remaining:
+                chunk = await run_in_threadpool(download.file.read, min(CHUNK_SIZE, remaining))
+                if not chunk:
+                    raise OSError("blob ended before its declared length")
+                remaining -= len(chunk)
                 yield chunk
 
-        super().__init__(chunks(), media_type="application/octet-stream", headers=headers)
+        super().__init__(chunks(), status_code=status, headers=headers)
 
     async def __call__(self, scope, receive, send) -> None:
         try:
@@ -114,7 +114,7 @@ async def upload_file(request: Request, filename: str | None = None, file_id: st
 def install_file_routes(app: FastAPI) -> None:
     @app.exception_handler(FileError)
     async def file_error(request: Request, error: FileError):
-        headers = dict(PRIVATE_HEADERS)
+        headers = {**PRIVATE_HEADERS, **error.headers}
         if error.status == 503:
             headers["Retry-After"] = "1"
         return JSONResponse({"detail": error.detail}, status_code=error.status, headers=headers)
@@ -158,15 +158,20 @@ def install_file_routes(app: FastAPI) -> None:
         await run_in_threadpool(request.app.state.files.delete, file_id)
         return Response(status_code=204, headers=PRIVATE_HEADERS)
 
-    @app.get("/{file_id}")
-    @app.get("/{file_id}/raw")
-    @app.get("/{file_id}/download")
+    @app.api_route("/{file_id}", methods=["GET", "HEAD"])
+    @app.api_route("/{file_id}/raw", methods=["GET", "HEAD"])
+    @app.api_route("/{file_id}/download", methods=["GET", "HEAD"])
     async def download_file(request: Request, file_id: str):
         validate_encoding(request.scope["raw_path"])
         store: FileStore = request.app.state.files
         download = await run_in_threadpool(store.open_download, file_id)
         try:
-            return DownloadResponse(store, download)
+            if request.method == "HEAD":
+                headers = download_headers(download.record)
+                with anyio.CancelScope(shield=True):
+                    await run_in_threadpool(store.close_download, download)
+                return Response(headers=headers)
+            return DownloadResponse(store, download, request)
         except BaseException:
             with anyio.CancelScope(shield=True):
                 await run_in_threadpool(store.close_download, download)

@@ -23,6 +23,10 @@ def test_invalid_public_urls_are_rejected_without_echoing_values(tmp_path, url):
     'data_dir = "../elsewhere"', 'data_dir = "~/personal"',
     'max_file_bytes = 0', 'max_file_bytes = true', 'storage_quota_bytes = -1',
     'max_transfers = 0', 'storage_quota_bytes = 9223372036854775808',
+    'cleanup_interval_seconds = 0', 'anonymous_rate = 0', 'anonymous_rate = true',
+    'anonymous_rate = nan', 'anonymous_rate = inf', 'anonymous_rate = 1e-320',
+    'anonymous_burst = -1', 'auth_failures_per_minute = 0', 'rate_limit_max_ips = 0',
+    'trusted_proxies = "*"', 'trusted_proxies = ["not-a-network"]',
 ])
 def test_invalid_settings_fail_clearly(tmp_path, extra):
     config = tmp_path / "invalid.toml"

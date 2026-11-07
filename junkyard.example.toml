@@ -9,4 +9,16 @@ bind_port = 8000
 max_file_bytes = 262144000
 storage_quota_bytes = 107374182400
 max_transfers = 4
+cleanup_interval_seconds = 60
+# Anonymous GET/HEAD requests: token refill per second and maximum burst.
+anonymous_rate = 1.0
+anonymous_burst = 10
+# Failed CLI authentication: burst and sustained failures per minute.
+auth_failures_per_minute = 5
+# Maximum tracked IP addresses in each limiter; idle entries expire.
+rate_limit_max_ips = 10000
+# Empty means ignore forwarded headers. For a local reverse proxy, explicitly
+# trust its address and configure it to OVERWRITE X-Forwarded-For with one IP.
+# Example: trusted_proxies = ["127.0.0.1", "::1"]
+trusted_proxies = []
 

@@ -1,6 +1,6 @@
 # Junkyard architecture
 
-Status: approved by the project owner on 2026-11-07. Milestone 1 is committed. Milestone 2 is implemented and awaiting review; later milestones have not started.
+Status: approved by the project owner on 2026-11-07. Milestones 1–2 are complete. Milestone 3 is implemented and awaiting review; later milestones have not started.
 
 This design builds on [requirements.md](requirements.md). Development milestones and acceptance criteria are in [implementation-plan.md](implementation-plan.md).
 
@@ -54,12 +54,17 @@ SQLite stores file metadata, credential hashes, sessions, and a schema version. 
 - Pin blobs during downloads so replacement and cleanup cannot break an active response.
 - Use short database transactions; never hold a transaction throughout a transfer.
 
-A cleanup task is planned for milestone 3 and will run every minute. It will remove expired records and unreferenced blobs, deferring blobs used by active downloads. Startup reconciliation will remove abandoned uploads and check storage consistency. Missing referenced blobs produce an operational error, not silent metadata deletion.
+A cleanup task runs every minute by default. It removes expired records and
+unreferenced blobs, deferring blobs used by active downloads or uploads. Startup
+reconciliation validates all referenced content before removing abandoned
+uploads or orphans. Missing or damaged referenced blobs produce an operational
+error, not silent metadata deletion. Failed unlinks stay charged to quota and
+are retried. Shutdown waits for running cleanup before releasing the storage lock.
 
 Milestone 2 implements immutable publication, revision checks, download pins,
 immediate best-effort removal of unreferenced blobs after normal operations, and
-quota accounting for all staged and stored content. Startup counts crash
-leftovers without deleting them. A filesystem lock enforces the single-worker
+quota accounting for all staged and stored content. Milestone 3 adds coordinated
+startup and periodic reconciliation. A filesystem lock enforces the single-worker
 boundary. Existing credential-only databases upgrade through the explicit local
 `junkyard migrate` command; new databases use schema version 2.
 
@@ -78,8 +83,9 @@ authentication before file operations exist. It returns `204` on success and a
 generic `401` challenge on authentication failure. This endpoint accepts only the
 CLI credential; it does not create a browser session. Milestone 2 implements file
 creation, replacement, metadata edits, deletion, and basic attachment downloads.
-The table below describes the final interface; HEAD/ranges remain milestone 3,
-and HTML negotiation and previews remain milestone 4.
+Milestone 3 adds HEAD and single byte ranges to all download routes. The table
+below describes the final interface; HTML negotiation and previews remain
+milestone 4.
 
 | Operation | Interface | Behavior |
 |---|---|---|
@@ -92,6 +98,13 @@ and HTML negotiation and previews remain milestone 4.
 | Replace | `PUT /{id}` | Atomically replace contents |
 | Edit metadata | `PATCH /{id}` | Change filename or expiration without re-uploading |
 | Delete | `DELETE /{id}` | Immediately deny subsequent reads and schedule cleanup |
+
+Downloads support closed, open-ended, and suffix byte ranges with `206` and
+`Content-Range`; invalid or unsatisfiable byte ranges return `416`. Multi-ranges
+and unknown units receive a full `200`, and HEAD ignores Range. A strong ETag
+derived from immutable blob identity and revision supports `If-Range` without
+exposing the storage filename. Date-based or weak validators receive a full
+response because multiple modifications may occur within one second.
 
 All CLI mutations require Basic authentication. Browser administration uses separate `/admin/` routes with session and CSRF checks; cookies do not authorize CLI mutation routes.
 
@@ -150,7 +163,26 @@ The following are approved defaults, configurable where appropriate:
 - **Logs:** record operation, status, duration, and internal correlation identifiers; omit passwords, cookies, filenames, and shared URLs from application and proxy access logs.
 - **Recovery:** provide an offline backup/restore procedure covering both SQLite and blobs. Deletion and expiration do not erase existing backups or previously downloaded copies.
 
-Rate-limit state stays bounded in memory and resets on restart. This is an explicit single-worker design; multiple application workers would require revisiting coordination. The burst allowance accommodates page loads and media requests, but per-IP throttling does not prevent distributed guessing and may affect users sharing an IP.
+Milestone 3 uses two bounded per-IP token-bucket maps. Anonymous GET/HEAD requests
+default to one request per second with a burst of ten, including unknown-path
+probes. Valid CLI authentication bypasses that read limit. Failed CLI
+authentication defaults to five attempts per minute with a burst of five;
+checks reserve a token before hashing and refund it on success or backend error.
+Throttle responses use `429` with `Retry-After`. Browser-login throttling will be
+integrated with milestone 5, and fixed assets can be exempted when introduced.
+
+Each limiter tracks up to 10000 IPs by default. Only idle, replenished entries
+can be evicted; at capacity, new IPs are temporarily rejected. Limits use a
+monotonic clock and reset on restart. Client IPs come from the socket peer unless
+it matches an explicit trusted proxy address/network. The single trusted proxy
+must overwrite `X-Forwarded-For` with exactly one valid IP; missing, repeated,
+invalid, or chained values from trusted peers are rejected. Other forwarded
+headers are ignored. Uvicorn's separate proxy-header parsing remains disabled.
+
+This is an explicit single-worker design; multiple application workers would
+require revisiting coordination. The burst allowance accommodates page loads
+and media requests, but per-IP throttling does not prevent distributed guessing
+and may affect users sharing an IP.
 
 ## V1 boundaries
 

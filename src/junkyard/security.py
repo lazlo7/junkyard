@@ -17,16 +17,7 @@ CHALLENGE = {"WWW-Authenticate": 'Basic realm="junkyard-cli", charset="UTF-8"', 
 
 
 def require_cli(request: Request) -> None:
-    credentials = decode_basic(request.headers.getlist("authorization"))
-    if credentials is None:
-        raise HTTPException(status_code=401, detail="Invalid CLI credentials", headers=CHALLENGE)
-    try:
-        valid = request.app.state.cli_authenticator.verify(*credentials)
-    except AuthenticationBusy:
-        raise HTTPException(status_code=503, detail="Authentication busy", headers={"Retry-After": "1", "Cache-Control": "no-store"}) from None
-    except StoreError:
-        raise HTTPException(status_code=503, detail="Authentication unavailable", headers={"Cache-Control": "no-store"}) from None
-    if not valid:
+    if not getattr(request.state, "cli_authenticated", False):
         raise HTTPException(status_code=401, detail="Invalid CLI credentials", headers=CHALLENGE)
 
 

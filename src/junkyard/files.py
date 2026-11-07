@@ -15,7 +15,7 @@ import secrets
 import stat
 import threading
 import time
-from typing import BinaryIO
+from typing import BinaryIO, Callable
 
 from junkyard.config import Settings
 from junkyard.database import Database, StoreError
@@ -74,15 +74,17 @@ def _sync_directory(path: Path) -> None:
 
 
 class FileStore:
-    def __init__(self, database: Database, settings: Settings):
+    def __init__(self, database: Database, settings: Settings, *, clock: Callable[[], float] = time.time):
         self.database = database
         self.settings = settings
+        self._clock = clock
         self.blobs = database.directory / "blobs"
         self.staging = database.directory / "staging"
         self._lock = threading.RLock()
         self._process_lock: int | None = None
         self._pins: dict[str, int] = {}
         self._pending: set[str] = set()
+        self._uploads: dict[str, Upload] = {}
         self._transfers = 0
         self.used_bytes = 0
 
@@ -98,7 +100,6 @@ class FileStore:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise StoreError("file storage is already in use; run only one server worker") from None
-            total = 0
             for directory in (self.blobs, self.staging):
                 if directory.is_symlink():
                     raise StoreError("storage directories must not be symlinks")
@@ -106,12 +107,12 @@ class FileStore:
                 info = directory.lstat()
                 if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
                     raise StoreError("storage directories must be private with permissions 0700")
-                # Charge orphaned and interrupted files too. Recovery is milestone 3.
-                for path in directory.iterdir():
-                    info = path.lstat()
-                    _check_regular(info)
-                    total += info.st_size
-            self.used_bytes = total
+            # Persist newly created directory entries before any committed file
+            # can depend on them surviving a power loss.
+            _sync_directory(self.database.directory)
+            # Reconcile only while holding the exclusive process lock. Validation
+            # precedes all deletion so a damaged reference cannot be silently lost.
+            self.cleanup()
             self._process_lock = descriptor
         except BaseException:
             os.close(descriptor)
@@ -122,13 +123,71 @@ class FileStore:
             os.close(self._process_lock)
             self._process_lock = None
 
+    def _inventory(self, directory: Path) -> dict[str, int]:
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise StoreError("storage directories must be private with permissions 0700")
+        entries = {}
+        for path in directory.iterdir():
+            if not re.fullmatch(r"[0-9a-f]{32}", path.name):
+                raise StoreError("unexpected entry in managed file storage")
+            info = path.lstat()
+            _check_regular(info)
+            entries[path.name] = info.st_size
+        return entries
+
+    def cleanup(self) -> None:
+        """Validate, expire metadata, and reclaim unreferenced content atomically
+        relative to uploads and downloads. Failed unlinks stay charged for retry.
+        """
+        with self._lock:
+            blobs = self._inventory(self.blobs)
+            staging = self._inventory(self.staging)
+            with self.database.connect() as connection:
+                records = connection.execute("SELECT blob, size FROM files").fetchall()
+            for record in records:
+                self._blob_path(record["blob"])
+                if blobs.get(record["blob"]) != record["size"]:
+                    raise StoreError("referenced blob is missing or has the wrong size; restore storage before serving")
+            # No filesystem changes or metadata deletion occur before validation.
+            with self.database.connect() as connection, connection:
+                connection.execute("DELETE FROM files WHERE expires_at IS NOT NULL AND expires_at <= ?", (int(self._clock()),))
+                referenced = {row[0] for row in connection.execute("SELECT blob FROM files")}
+            active_blobs = {upload.blob for upload in self._uploads.values() if upload.published}
+            protected = referenced | set(self._pins) | active_blobs
+            self._pending.difference_update(referenced)
+            self._pending.update(set(blobs) - referenced - active_blobs)
+            # Preserve reservations after a partial write until its upload exits.
+            reserved = sum(max(0, upload.size - staging.get(upload.blob, 0))
+                           for upload in self._uploads.values() if not upload.published)
+            self.used_bytes = sum(blobs.values()) + sum(staging.values()) + reserved
+            for directory, entries, keep in (
+                (self.blobs, blobs, protected),
+                (self.staging, staging, set(self._uploads)),
+            ):
+                changed = False
+                for name, size in entries.items():
+                    if name in keep:
+                        continue
+                    try:
+                        (directory / name).unlink()
+                    except OSError:
+                        logger.warning("File cleanup deferred; storage remains charged")
+                    else:
+                        self.used_bytes -= size
+                        if directory == self.blobs:
+                            self._pending.discard(name)
+                        changed = True
+                if changed:
+                    _sync_directory(directory)
+
     def _take_slot(self) -> None:
         if self._transfers >= self.settings.max_transfers:
             raise FileError(503, "Transfer capacity reached; retry later")
         self._transfers += 1
 
     def _blob_path(self, blob: str) -> Path:
-        if not re.fullmatch(r"[0-9a-f]{32}", blob):
+        if not isinstance(blob, str) or not re.fullmatch(r"[0-9a-f]{32}", blob):
             raise StoreError("invalid blob reference in metadata")
         return self.blobs / blob
 
@@ -136,7 +195,7 @@ class FileStore:
         validate_id(file_id)
         with self.database.connect() as connection:
             row = connection.execute("SELECT * FROM files WHERE id = ?", (file_id,)).fetchone()
-        if row is None or (row["expires_at"] is not None and row["expires_at"] <= int(time.time())):
+        if row is None or (row["expires_at"] is not None and row["expires_at"] <= int(self._clock())):
             raise FileError(404, "File not found")
         return FileRecord(**dict(row))
 
@@ -144,7 +203,7 @@ class FileStore:
         if options.name is not None:
             validate_name(options.name)
         if options.lifetime is not None:
-            expiration_at(int(time.time()), options.lifetime)
+            expiration_at(int(self._clock()), options.lifetime)
         with self._lock:
             previous = self._find(file_id) if file_id is not None else None
             self._take_slot()
@@ -158,7 +217,9 @@ class FileStore:
                         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                     except FileExistsError:
                         continue
-                    return Upload(os.fdopen(descriptor, "wb", buffering=0), path, blob, options, previous)
+                    upload = Upload(os.fdopen(descriptor, "wb", buffering=0), path, blob, options, previous)
+                    self._uploads[blob] = upload
+                    return upload
                 raise FileError(503, "Could not allocate upload storage")
             except BaseException:
                 self._transfers -= 1
@@ -221,7 +282,7 @@ class FileStore:
                     "UPDATE files SET blob = ?, name = ?, size = ?, modified_at = ?, expires_at = ?, revision = ? "
                     "WHERE id = ? AND revision = ? AND blob = ? AND (expires_at IS NULL OR expires_at > ?)",
                     (record.blob, record.name, record.size, record.modified_at, record.expires_at,
-                     record.revision, record.id, previous.revision, previous.blob, int(time.time())),
+                     record.revision, record.id, previous.revision, previous.blob, int(self._clock())),
                 )
                 if result.rowcount != 1:
                     raise FileError(409, "File changed or disappeared during the update")
@@ -241,7 +302,7 @@ class FileStore:
             file_id = previous.id if previous else self._allocate_id(upload.options.secure)
             # Publish bytes durably before referring to them in SQLite.
             self._publish(upload)
-            now = int(time.time())
+            now = int(self._clock())
             lifetime = upload.options.lifetime
             expiration = (
                 previous.expires_at if previous and lifetime is None
@@ -273,9 +334,10 @@ class FileStore:
                     else:
                         self.used_bytes -= upload.size
                 # Once published, an ambiguous commit must never cause blob deletion.
-                # Unreferenced blobs remain charged and recoverable by milestone 3.
+                # Unreferenced blobs remain charged until a cleanup pass.
             finally:
                 upload.released = True
+                self._uploads.pop(upload.blob, None)
                 self._transfers -= 1
 
     def patch(self, file_id: str, options: FileOptions) -> FileRecord:
@@ -285,7 +347,7 @@ class FileStore:
             validate_name(options.name)
         with self._lock:
             previous = self._find(file_id)
-            now = int(time.time())
+            now = int(self._clock())
             record = replace(
                 previous, name=previous.name if options.name is None else options.name,
                 expires_at=previous.expires_at if options.lifetime is None else expiration_at(now, options.lifetime),

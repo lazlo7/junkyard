@@ -1,6 +1,8 @@
 """Explicit, non-secret application configuration."""
 
 from dataclasses import dataclass
+import ipaddress
+import math
 from pathlib import Path
 import tomllib
 from urllib.parse import urlsplit
@@ -19,6 +21,12 @@ class Settings:
     max_file_bytes: int = 250 * 1024 * 1024
     storage_quota_bytes: int = 100 * 1024 * 1024 * 1024
     max_transfers: int = 4
+    cleanup_interval_seconds: int = 60
+    anonymous_rate: float = 1.0
+    anonymous_burst: int = 10
+    auth_failures_per_minute: int = 5
+    rate_limit_max_ips: int = 10000
+    trusted_proxies: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.public_url, str):
@@ -50,10 +58,22 @@ class Settings:
             raise ConfigError("bind_host must be 127.0.0.1 or ::1; use an HTTPS reverse proxy")
         if type(self.bind_port) is not int or not 1 <= self.bind_port <= 65535:
             raise ConfigError("bind_port must be an integer between 1 and 65535")
-        for name in ("max_file_bytes", "storage_quota_bytes", "max_transfers"):
+        for name in ("max_file_bytes", "storage_quota_bytes", "max_transfers", "cleanup_interval_seconds",
+                     "anonymous_burst", "auth_failures_per_minute", "rate_limit_max_ips"):
             value = getattr(self, name)
             if type(value) is not int or not 0 < value <= 2**63 - 1:
                 raise ConfigError(f"{name} must be a positive 64-bit integer")
+        if (type(self.anonymous_rate) not in (int, float)
+            or not 0 < self.anonymous_rate <= 2**63 - 1
+            or not math.isfinite(self.anonymous_burst / self.anonymous_rate)):
+            raise ConfigError("anonymous_rate must be a finite positive number")
+        if not isinstance(self.trusted_proxies, (list, tuple)) or not all(isinstance(value, str) for value in self.trusted_proxies):
+            raise ConfigError("trusted_proxies must be a list of IP addresses or networks")
+        try:
+            networks = tuple(str(ipaddress.ip_network(value, strict=False)) for value in self.trusted_proxies)
+        except ValueError:
+            raise ConfigError("trusted_proxies must contain only IP addresses or networks") from None
+        object.__setattr__(self, "trusted_proxies", networks)
 
 
 def load_settings(path: Path) -> Settings:
@@ -82,5 +102,11 @@ def load_settings(path: Path) -> Settings:
         max_file_bytes=values.get("max_file_bytes", 250 * 1024 * 1024),
         storage_quota_bytes=values.get("storage_quota_bytes", 100 * 1024 * 1024 * 1024),
         max_transfers=values.get("max_transfers", 4),
+        cleanup_interval_seconds=values.get("cleanup_interval_seconds", 60),
+        anonymous_rate=values.get("anonymous_rate", 1.0),
+        anonymous_burst=values.get("anonymous_burst", 10),
+        auth_failures_per_minute=values.get("auth_failures_per_minute", 5),
+        rate_limit_max_ips=values.get("rate_limit_max_ips", 10000),
+        trusted_proxies=values.get("trusted_proxies", ()),
     )
 

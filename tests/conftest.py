@@ -8,6 +8,22 @@ CLI_PASSWORD = "test CLI passphrase: alpha"
 BROWSER_PASSWORD = "test browser passphrase beta"
 
 
+class FakeClock:
+    def __init__(self, now=1700000000.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+@pytest.fixture
+def clock():
+    return FakeClock()
+
+
 @pytest.fixture(scope="session")
 def hashes():
     return hash_password(CLI_PASSWORD), hash_password(BROWSER_PASSWORD)
