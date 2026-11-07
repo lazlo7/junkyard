@@ -21,6 +21,7 @@ def download_headers(record: FileRecord) -> dict[str, str]:
     identity = f"{record.blob}:{record.revision}".encode("ascii")
     return {
         **PRIVATE_HEADERS,
+        "Content-Security-Policy": "sandbox; default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
         "Content-Length": str(record.size),
         "Content-Type": "application/octet-stream",
         "Content-Disposition": f'attachment; filename="{fallback}"; filename*=UTF-8\'\'{quote(record.name, safe="")}',

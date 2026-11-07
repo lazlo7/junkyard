@@ -4,10 +4,10 @@ A personal, self-hosted, CLI-centric file server. The approved design is in
 [docs/architecture.md](docs/architecture.md), with milestones in
 [docs/implementation-plan.md](docs/implementation-plan.md).
 
-Milestones 1–3 provide configuration, private SQLite storage, password
+Milestones 1–4 provide configuration, private SQLite storage, password
 administration, Basic authentication, streaming CLI file operations, expiration
-cleanup and recovery, HEAD/range downloads, and request throttling. Browser pages
-and sessions belong to later milestones.
+cleanup and recovery, HEAD/range downloads, request throttling, and a public
+browser viewer. Browser administration and sessions belong to milestone 5.
 
 ## Development setup
 
@@ -36,13 +36,14 @@ The upgrade adds file metadata in a transaction and preserves both credentials.
 Running it again is harmless. New `init` commands create the current schema
 directly; the server refuses an old schema until it is migrated.
 
-Milestone 3 keeps schema version 2, so milestone 2 databases need no migration.
+Milestones 3–4 keep schema version 2, so milestone 2 databases need no migration.
 Startup recovery now removes abandoned staging files and unreferenced blobs
 after verifying all referenced content. It also processes expired files.
 
-The runtime dependencies are FastAPI, Uvicorn, and `argon2-cffi`. Python's standard
+The runtime dependencies are FastAPI, Uvicorn, Jinja2, and `argon2-cffi`. Python's standard
 library supplies configuration parsing and SQLite access. pytest and httpx are
-development dependencies. Jinja2 will be added with the viewer milestone.
+development dependencies. Jinja2 supplies escaped, server-rendered HTML;
+its MarkupSafe dependency provides HTML escaping. No frontend build is required.
 `uv.lock` records the resolved versions; use `uv sync --locked` to reproduce them.
 
 ## Initialize and recover credentials
@@ -164,8 +165,8 @@ JSON with a `detail` message.
   existing name; omission of `e` preserves the existing deadline.
 - `PATCH` changes metadata only and accepts no request body. Unknown or repeated
   parameters are rejected rather than ignored.
-- `/{id}`, `/{id}/raw`, and `/{id}/download` currently serve binary attachments.
-  Inline previews and browser-versus-curl negotiation arrive in milestone 4.
+- `/{id}` negotiates a browser viewer or file bytes; `/{id}/raw` always returns
+  bytes, with allowlisted media inline; `/{id}/download` always forces attachment.
 
 Files that have expired are inaccessible and cannot be revived with an update.
 New reads fail at the deadline; already-started downloads can finish. No public
@@ -206,9 +207,52 @@ retried; cleanup errors are logged without file paths. Shutdown waits for any
 running cleanup before releasing the process lock. Do not manually modify
 storage while serving files.
 
+## Public browser viewer
+
+Open a shared link in a browser to see a preview, ID, filename, byte size,
+upload/modification times, expiration, and download/share controls. Times are
+shown in UTC; permanent files show “Never”. Copying uses the configured canonical
+`public_url`, never the request's Host header. If clipboard access fails or
+JavaScript is unavailable, the share URL remains selectable and the download
+link still works.
+
+`/{id}` selects HTML only when `Accept` explicitly includes `text/html` with a
+positive quality at least as high as bytes, JSON, or plain text. Wildcards alone,
+missing Accept, and normal curl/wget requests return bytes. User-Agent is not
+used. Negotiated responses include `Vary: Accept`. Explicit `/raw` and `/download`
+routes return bytes even when HTML is accepted.
+
+Preview policy:
+
+- UTF-8 text with common text/code extensions (or no extension) is displayed as
+  escaped plain text, including Markdown. Reads are bounded to 256 KiB plus one
+  truncation-detection byte; a notice identifies truncated previews. Invalid
+  UTF-8 or binary control characters disable the preview. Full downloads are
+  unchanged.
+- PNG, JPEG, GIF, and WebP images; MP3, WAV, FLAC, Ogg audio; MP4/M4V, WebM, and
+  Ogg video; and M4A audio have previews when their extensions and bounded
+  container signatures agree. `/raw` supplies the explicit media MIME type and
+  inline disposition. Browser codec support determines actual playback; files
+  are not transcoded or fully decoded by the server.
+- HTML, SVG, PDF, other formats, and mismatched media signatures show a download
+  message. Their raw/download responses use `application/octet-stream` and
+  attachment disposition. An upload's supplied Content-Type cannot enable a
+  preview.
+
+Pages use autoescaped Jinja2 templates, a restrictive CSP, `nosniff`, no-store,
+no-referrer, and fixed local CSS/JavaScript. Uploaded bytes have a sandbox CSP as
+additional protection. No uploaded HTML, SVG, PDF, script, or stylesheet is
+served as active content. Only the two exact application asset paths are exempt
+from anonymous rate limits; viewer and media requests consume the usual budget.
+
+Viewer GET/HEAD failures return HTML when requested, including missing links and
+rate limits. Headless requests and explicit raw/download errors return JSON.
+Status codes and useful headers such as `Retry-After`, `WWW-Authenticate`, and
+`Content-Range` are preserved; HEAD never has a response body.
+
 ## HEAD and resumable downloads
 
-All three download routes support HEAD and single byte ranges:
+All three file routes support HEAD; their byte representations support single ranges:
 
 ```sh
 curl -I https://files.example.com/ID
@@ -223,12 +267,14 @@ Multi-range requests and unknown range units fall back to a full `200` response;
 Range is ignored on HEAD. This follows the selective range support permitted by
 [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#name-range).
 
-Responses include a strong `ETag` and `Last-Modified`. Send the saved ETag as
+Byte responses include a strong `ETag` and `Last-Modified`. Send the saved ETag as
 `If-Range` when resuming a potentially replaced file: a matching tag allows the
 range; a changed tag returns the complete new file. Weak tags and date-based
 `If-Range` values also return the full file because multiple changes can occur
 within one second. `curl -C -` alone does not check that a file is unchanged.
 Responses remain `Cache-Control: no-store`.
+Negotiated HTML ignores Range and has no blob ETag. Its HEAD response matches
+the complete viewer's headers, including the rendered page's Content-Length.
 
 ## Request limits and trusted proxies
 
@@ -286,7 +332,12 @@ and failures around publication/commit. Fake-clock checks cover expiration and
 rate limits; recovery checks cover referenced blobs, active transfers, and failed
 cleanup. A real Uvicorn/curl exchange covers the file lifecycle, HEAD, ranges,
 resuming a download, and a chunked stdin upload using a password file. A process
-crash test verifies cleanup after an interrupted upload. Integration tests require Linux pseudo-terminals,
+crash test verifies cleanup after an interrupted upload. Viewer checks cover
+escaping, bounded text reads, MIME spoofing, media ranges, negotiation, asset
+throttle exemptions, and error responses. If Chrome/Chromium is installed, an
+optional headless smoke test renders the viewer with an isolated project-local
+profile and checks that its share script loads. It is skipped otherwise.
+Integration tests require Linux pseudo-terminals,
 loopback sockets, and curl. A restrictive sandbox may need to permit those
 capabilities to run the tests.
 

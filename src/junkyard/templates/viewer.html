@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ file.name }} · Junkyard{% endblock %}
+{% block content %}
+  <h1>{{ file.name }}</h1>
+  <div class="actions">
+    <a class="button" href="/{{ file.id }}/download" download>Download file</a>
+    <button id="copy-link" type="button" hidden>Copy share link</button>
+  </div>
+  <label for="share-link">Share link</label>
+  <input id="share-link" type="url" readonly value="{{ share_url }}" spellcheck="false">
+  <p id="copy-status" role="status" aria-live="polite"></p>
+  <section class="preview" aria-label="File preview">
+  {% if preview.kind == "text" %}
+    {% if preview.truncated %}<p class="notice">Preview truncated to the first 256 KiB. Download the file for its full contents.</p>{% endif %}
+    <pre><code>{{ preview.text }}</code></pre>
+  {% elif preview.kind == "image" %}
+    <img src="/{{ file.id }}/raw" alt="Preview of {{ file.name }}">
+  {% elif preview.kind in ("audio", "video") %}
+    {% if preview.kind == "video" %}<video controls preload="metadata" playsinline>{% else %}<audio controls preload="metadata">{% endif %}
+      <source src="/{{ file.id }}/raw" type="{{ preview.media_type }}">
+      Your browser cannot play this file. Use the download button above.
+    {% if preview.kind == "video" %}</video>{% else %}</audio>{% endif %}
+    <p>Playback depends on your browser’s codec support. If playback fails, download the file.</p>
+  {% else %}
+    <p class="notice">No browser preview is available for this file. Download it to view its contents.</p>
+  {% endif %}
+  </section>
+  <dl>
+    <dt>File ID</dt><dd><code>{{ file.id }}</code></dd>
+    <dt>Filename</dt><dd>{{ file.name }}</dd>
+    <dt>Size</dt><dd>{{ "{:,}".format(file.size) }} bytes</dd>
+    <dt>Uploaded</dt><dd>{{ created }}</dd>
+    <dt>Last modified</dt><dd>{{ modified }}</dd>
+    <dt>Expires</dt><dd>{{ expires }}</dd>
+  </dl>
+  <script src="/assets/viewer.js" defer></script>
+{% endblock %}

@@ -1,0 +1,25 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.6; }
+* { box-sizing: border-box; }
+body { margin: 0 auto; max-width: 64rem; padding: 1.5rem; }
+.brand { border-bottom: 1px solid #8886; padding-bottom: 1rem; font-weight: 700; }
+.brand span { font-weight: 400; margin-left: 1rem; opacity: .75; }
+h1 { font-size: clamp(1.5rem, 4vw, 2.4rem); line-height: 1.2; overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; gap: .75rem; margin: 1.5rem 0; }
+button, .button { font: inherit; padding: .5rem 1rem; border: 1px solid #888; border-radius: .35rem; cursor: pointer; }
+.button { color: white; background: #2758a3; text-decoration: none; }
+button { color: inherit; background: transparent; }
+[hidden] { display: none; }
+:focus-visible { outline: 3px solid #568de0; outline-offset: 3px; }
+input { width: 100%; font: inherit; padding: .5rem; border: 1px solid #888; border-radius: .25rem; }
+#copy-status { min-height: 1.6em; margin: .25rem 0; }
+.preview { margin: 1.5rem 0; border-block: 1px solid #8886; padding: 1.5rem 0; }
+img, video, audio { display: block; max-width: 100%; margin: auto; }
+img, video { max-height: 65vh; }
+audio { width: 100%; }
+pre { overflow: auto; max-height: 65vh; margin: 0; padding: 1rem; background: #8881; tab-size: 4; }
+.notice { padding: 1rem; background: #8881; border-left: 3px solid #568de0; }
+dl { display: grid; grid-template-columns: minmax(7rem, 1fr) 3fr; gap: .5rem 1rem; }
+dt { opacity: .75; }
+dd { margin: 0; overflow-wrap: anywhere; }
+footer { margin-top: 2rem; font-size: .875rem; opacity: .75; }
+@media (max-width: 32rem) { body { padding: 1rem; } dl { display: block; } dd { margin-bottom: .75rem; } }

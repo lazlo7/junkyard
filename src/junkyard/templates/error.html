@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}{{ status }} · Junkyard{% endblock %}
+{% block content %}
+  <h1>{{ status }}</h1>
+  <p class="notice">{{ detail }}</p>
+  {% if status == 404 %}<p>The link may be incorrect, expired, or deleted.</p>{% endif %}
+  {% if retry_after %}<p>Try again in {{ retry_after }} seconds.</p>{% endif %}
+{% endblock %}

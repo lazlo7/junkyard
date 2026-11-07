@@ -8,12 +8,15 @@ import anyio
 from fastapi import Depends, FastAPI, Request, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
+from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from junkyard.database import StoreError
 from junkyard.file_options import FileError, parse_options, validate_encoding, validate_name
 from junkyard.files import CHUNK_SIZE, Download, FileRecord, FileStore
 from junkyard.http_files import PRIVATE_HEADERS, download_headers, select_range
+from junkyard.presentation import error_response, viewer_response, wants_html
+from junkyard.previews import inspect_preview
 from junkyard.security import require_cli
 
 def expected_length(request: Request) -> int | None:
@@ -51,10 +54,10 @@ def mutation_response(request: Request, record: FileRecord, status: int) -> Resp
 
 
 class DownloadResponse(StreamingResponse):
-    def __init__(self, store: FileStore, download: Download, request: Request | None = None):
+    def __init__(self, store: FileStore, download: Download, request: Request | None = None, headers=None):
         self.store = store
         self.download = download
-        headers = download_headers(download.record)
+        headers = download_headers(download.record) if headers is None else headers
         start, length, status = select_range(request, download.record.size, headers["ETag"]) if request else (0, download.record.size, 200)
         if status == 206:
             headers["Content-Range"] = f"bytes {start}-{start + length - 1}/{download.record.size}"
@@ -117,16 +120,20 @@ def install_file_routes(app: FastAPI) -> None:
         headers = {**PRIVATE_HEADERS, **error.headers}
         if error.status == 503:
             headers["Retry-After"] = "1"
-        return JSONResponse({"detail": error.detail}, status_code=error.status, headers=headers)
+        return error_response(request, error.status, error.detail, headers)
+
+    @app.exception_handler(HTTPException)
+    async def http_error(request: Request, error: HTTPException):
+        return error_response(request, error.status_code, str(error.detail), error.headers)
 
     @app.exception_handler(StoreError)
     async def store_error(request: Request, error: StoreError):
-        return JSONResponse({"detail": "File storage unavailable"}, status_code=503, headers=PRIVATE_HEADERS)
+        return error_response(request, 503, "File storage unavailable", {"Retry-After": "1"})
 
     @app.exception_handler(OSError)
     async def io_error(request: Request, error: OSError):
         status = 507 if error.errno in (errno.ENOSPC, errno.EDQUOT) else 503
-        return JSONResponse({"detail": "File storage unavailable"}, status_code=status, headers=PRIVATE_HEADERS)
+        return error_response(request, status, "File storage unavailable")
 
     @app.put("/u", dependencies=[Depends(require_cli)])
     @app.put("/u/", dependencies=[Depends(require_cli)])
@@ -166,12 +173,27 @@ def install_file_routes(app: FastAPI) -> None:
         store: FileStore = request.app.state.files
         download = await run_in_threadpool(store.open_download, file_id)
         try:
+            is_raw = request.url.path.endswith("/raw")
+            negotiated = not is_raw and not request.url.path.endswith("/download")
+            if negotiated and wants_html(request):
+                preview = await run_in_threadpool(inspect_preview, download.file, download.record.name, include_text=True)
+                response = await run_in_threadpool(viewer_response, request, download.record, preview, store.settings.public_url)
+                with anyio.CancelScope(shield=True):
+                    await run_in_threadpool(store.close_download, download)
+                return response
+            headers = download_headers(download.record)
+            if negotiated:
+                headers["Vary"] = "Accept"
+            if is_raw:
+                preview = await run_in_threadpool(inspect_preview, download.file, download.record.name, include_text=False)
+                if preview.kind in ("image", "audio", "video"):
+                    headers["Content-Type"] = preview.media_type
+                    headers["Content-Disposition"] = headers["Content-Disposition"].replace("attachment;", "inline;", 1)
             if request.method == "HEAD":
-                headers = download_headers(download.record)
                 with anyio.CancelScope(shield=True):
                     await run_in_threadpool(store.close_download, download)
                 return Response(headers=headers)
-            return DownloadResponse(store, download, request)
+            return DownloadResponse(store, download, request, headers)
         except BaseException:
             with anyio.CancelScope(shield=True):
                 await run_in_threadpool(store.close_download, download)

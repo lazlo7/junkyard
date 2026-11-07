@@ -11,6 +11,7 @@ from junkyard.database import Database
 from junkyard.file_routes import install_file_routes
 from junkyard.files import FileStore
 from junkyard.lifecycle import cleanup_loop
+from junkyard.presentation import install_assets
 from junkyard.rate_limits import RequestLimits
 from junkyard.request_protection import RequestProtection
 from junkyard.security import CLIAuthenticator, require_cli
@@ -46,6 +47,7 @@ def create_app(settings: Settings) -> FastAPI:
     def check_authentication() -> Response:
         return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
+    install_assets(app)
     install_file_routes(app)
     return app
 

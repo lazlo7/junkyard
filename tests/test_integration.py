@@ -131,6 +131,11 @@ def test_uvicorn_and_curl_authentication_and_file_lifecycle(database, config_fil
         assert uploaded["size"] == len(contents)
         file_url = base_url + urlsplit(uploaded["url"]).path
         assert curl(file_url) == contents
+        viewer = curl("-H", "Accept: text/html", file_url)
+        assert b"<!doctype html>" in viewer and b"No browser preview" in viewer
+        assert uploaded["id"].encode() in viewer
+        assert curl("-H", "Accept: text/html", file_url + "/download") == contents
+        assert curl("-H", "Accept: text/html", file_url + "/raw") == contents
         head = curl("--head", file_url)
         assert b"accept-ranges: bytes" in head.lower()
         assert f"content-length: {len(contents)}".encode() in head.lower()

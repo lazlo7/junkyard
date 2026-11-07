@@ -1,6 +1,6 @@
 # Junkyard implementation plan
 
-Status: approved by the project owner on 2026-11-07. Milestones 1–2 are complete. Milestone 3 is implemented and awaiting review; later milestones have not started.
+Status: approved by the project owner on 2026-11-07. Milestones 1–3 are complete. Milestone 4 is implemented and awaiting review; later milestones have not started.
 
 The behavior, interfaces, security policies, and operational defaults are defined in [architecture.md](architecture.md), based on [requirements.md](requirements.md).
 
@@ -76,7 +76,7 @@ Implementation notes:
 
 ## Milestone 3: Lifecycle and HTTP behavior
 
-Status: implemented and awaiting review; all 184 tests pass, including Uvicorn/curl
+Status: complete and accepted for continuation to milestone 4; all 184 tests passed, including Uvicorn/curl
 integration and process-crash recovery tests. The existing Starlette/httpx
 deprecation warning remains.
 
@@ -113,6 +113,11 @@ Implementation notes:
 
 ## Milestone 4: Public viewer
 
+Status: implemented and awaiting review; all 232 tests pass, including real
+Uvicorn/curl negotiation and the isolated Chrome smoke test. Wheel and source
+distribution contents were verified, including templates and assets. The
+existing Starlette/httpx deprecation warning remains.
+
 Deliver negotiated HTML, safe previews, metadata display, and download/share controls.
 
 Acceptance criteria:
@@ -124,6 +129,26 @@ Acceptance criteria:
 - Text previews are bounded and show truncation clearly.
 - Unsupported formats provide a download path.
 - Error pages and headless errors have appropriate status codes and formats.
+
+Implementation notes:
+
+- Explicit Accept negotiation selects server-rendered HTML on shared links;
+  raw/download routes retain predictable byte responses. HEAD matches the
+  selected representation and HTML ignores byte ranges.
+- Autoescaped Jinja2 templates show metadata, bounded plain-text previews, and
+  allowlisted image/audio/video previews. Media extensions must match bounded
+  container signatures; uploaded MIME headers never grant inline treatment.
+- HTML, SVG, PDF, and unsupported formats remain attachments. Restrictive CSP,
+  nosniff, no-store, and no-referrer apply to viewer responses; bytes add sandbox
+  CSP. Preview reads retain download pins and transfer limits.
+- Two fixed local assets supply responsive CSS and the copy-link button; they
+  are exempt from anonymous read throttling. The canonical link and download
+  remain usable without JavaScript. No frontend build is introduced.
+- Errors negotiate HTML/JSON while retaining status and relevant headers.
+  Real curl tests cover viewer negotiation; an optional isolated Chrome smoke
+  test checks rendered escaping and loading of the share script.
+- Jinja2 (and its MarkupSafe dependency) implements the approved templating
+  choice. No database schema or configuration change is required.
 
 ## Milestone 5: Browser administration
 

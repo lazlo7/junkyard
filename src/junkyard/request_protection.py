@@ -4,10 +4,10 @@ import ipaddress
 
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
 
 from junkyard.config import Settings
 from junkyard.database import StoreError
+from junkyard.presentation import ASSETS, error_response
 from junkyard.rate_limits import RateLimited, RequestLimits
 from junkyard.security import CHALLENGE, AuthenticationBusy, CLIAuthenticator, decode_basic
 
@@ -43,10 +43,7 @@ class RequestProtection:
         return str(peer)
 
     async def _respond(self, request: Request, receive, send, status: int, detail: str, headers=None) -> None:
-        response = JSONResponse({"detail": detail}, status_code=status,
-                                headers={"Cache-Control": "no-store", **(headers or {})})
-        if request.method == "HEAD":
-            response = Response(status_code=status, headers=dict(response.headers))
+        response = error_response(request, status, detail, headers)
         await response(request.scope, receive, send)
 
     async def __call__(self, scope, receive, send) -> None:
@@ -86,9 +83,9 @@ class RequestProtection:
                 if failure is not None:
                     await self._respond(request, receive, send, *failure)
                     return
-            if request.method in ("GET", "HEAD") and not state["cli_authenticated"]:
-                # There are no static assets yet. All anonymous reads, including
-                # nonexistent paths and HEAD probes, consume the same IP budget.
+            if request.method in ("GET", "HEAD") and not state["cli_authenticated"] and scope["path"] not in ASSETS:
+                # Only fixed application assets are exempt; arbitrary paths and
+                # file/media requests continue consuming the same IP budget.
                 self.limits.anonymous.take(client_ip)
         except RateLimited as error:
             await self._respond(request, receive, send, 429, "Too many requests",

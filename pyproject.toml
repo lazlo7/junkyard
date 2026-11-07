@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "argon2-cffi>=25.1,<26",
     "fastapi>=0.115,<1",
+    "jinja2>=3.1.6,<4",
     "uvicorn>=0.34,<1",
 ]
 
@@ -22,6 +23,9 @@ dev = ["httpx>=0.28,<1", "pytest>=8,<10"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+junkyard = ["templates/*.html", "static/*.css", "static/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

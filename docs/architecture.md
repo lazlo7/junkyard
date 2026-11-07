@@ -1,6 +1,6 @@
 # Junkyard architecture
 
-Status: approved by the project owner on 2026-11-07. Milestones 1–2 are complete. Milestone 3 is implemented and awaiting review; later milestones have not started.
+Status: approved by the project owner on 2026-11-07. Milestones 1–3 are complete. Milestone 4 is implemented and awaiting review; later milestones have not started.
 
 This design builds on [requirements.md](requirements.md). Development milestones and acceptance criteria are in [implementation-plan.md](implementation-plan.md).
 
@@ -84,8 +84,7 @@ generic `401` challenge on authentication failure. This endpoint accepts only th
 CLI credential; it does not create a browser session. Milestone 2 implements file
 creation, replacement, metadata edits, deletion, and basic attachment downloads.
 Milestone 3 adds HEAD and single byte ranges to all download routes. The table
-below describes the final interface; HTML negotiation and previews remain
-milestone 4.
+below includes milestone 4's HTML negotiation and previews.
 
 | Operation | Interface | Behavior |
 |---|---|---|
@@ -148,6 +147,23 @@ The admin panel provides a paginated file list, storage usage, upload/replacemen
 
 Automatic browser-versus-curl responses use `Accept` negotiation, not user-agent detection. Explicit raw and download routes provide predictable alternatives. Restricted previews avoid executing uploaded active content on the admin application's origin.
 
+Milestone 4 implements autoescaped Jinja2 templates and two packaged assets,
+without a frontend build. HTML must be explicitly accepted with a positive
+quality at least as high as bytes, JSON, or plain text; wildcard-only requests
+keep byte behavior. HTML HEAD renders the same bounded page to match its headers;
+HTML ignores byte ranges and does not reuse the blob's validator.
+
+Preview inspection uses the pinned immutable blob outside the event loop.
+Common text/code extensions and extensionless UTF-8 files render as escaped plain
+text, with a 256 KiB limit and a truncation notice. Media requires an allowlisted
+extension and matching bounded container signature: PNG/JPEG/GIF/WebP,
+MP3/WAV/FLAC/Ogg, MP4/M4V/M4A, and WebM. This identifies containers rather than
+validating codecs; browser support determines playback. No upload Content-Type
+is trusted. Unsupported and active document formats remain octet-stream
+attachments, including on `/raw`. Byte responses add a sandbox CSP, while viewer
+pages allow only local scripts, styles, images, and media and prohibit framing.
+Canonical share links remain selectable if JavaScript or clipboard access fails.
+
 ## Security and operational defaults
 
 The following are approved defaults, configurable where appropriate:
@@ -169,7 +185,8 @@ probes. Valid CLI authentication bypasses that read limit. Failed CLI
 authentication defaults to five attempts per minute with a burst of five;
 checks reserve a token before hashing and refund it on success or backend error.
 Throttle responses use `429` with `Retry-After`. Browser-login throttling will be
-integrated with milestone 5, and fixed assets can be exempted when introduced.
+integrated with milestone 5. Milestone 4 exempts only the two exact packaged asset
+paths from the anonymous read budget; viewer and media requests remain limited.
 
 Each limiter tracks up to 10000 IPs by default. Only idle, replenished entries
 can be evicted; at capacity, new IPs are temporarily rejected. Limits use a
