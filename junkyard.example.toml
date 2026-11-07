@@ -5,4 +5,8 @@ public_url = "https://files.example.com"
 data_dir = "data"
 bind_host = "127.0.0.1"
 bind_port = 8000
+# Byte counts cover stored content, staging files, and obsolete blobs.
+max_file_bytes = 262144000
+storage_quota_bytes = 107374182400
+max_transfers = 4
 

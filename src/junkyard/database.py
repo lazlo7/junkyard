@@ -10,7 +10,23 @@ import time
 from typing import Iterator, Literal
 
 CredentialKind = Literal["cli", "browser"]
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+
+def create_file_schema(connection: sqlite3.Connection) -> None:
+    connection.execute("""
+        CREATE TABLE files (
+            id TEXT PRIMARY KEY,
+            blob TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            size INTEGER NOT NULL CHECK (size >= 0),
+            created_at INTEGER NOT NULL,
+            modified_at INTEGER NOT NULL,
+            expires_at INTEGER,
+            revision INTEGER NOT NULL CHECK (revision > 0)
+        )
+    """)
+    connection.execute("CREATE INDEX files_expiration ON files(expires_at)")
 
 
 class StoreError(RuntimeError):
@@ -65,7 +81,7 @@ class Database:
             connection = sqlite3.connect(self.path.as_uri() + "?mode=rw", uri=True, timeout=5)
             try:
                 connection.row_factory = sqlite3.Row
-                if connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+                if connection.execute("PRAGMA user_version").fetchone()[0] not in (1, SCHEMA_VERSION):
                     raise StoreError("unsupported database schema version")
                 yield connection
             finally:
@@ -78,6 +94,20 @@ class Database:
             rows = connection.execute("SELECT kind FROM credentials").fetchall()
             if {row["kind"] for row in rows} != {"cli", "browser"}:
                 raise StoreError("both CLI and browser credentials must be initialized")
+
+    def require_file_schema(self) -> None:
+        self.check_initialized()
+        with self.connect() as connection:
+            if connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+                raise StoreError("database upgrade required; stop the server and run junkyard migrate")
+
+    def migrate(self) -> None:
+        self.check_initialized()
+        with self.connect() as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute("PRAGMA user_version").fetchone()[0] == 1:
+                create_file_schema(connection)
+                connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def initialize(self, cli_hash: str, browser_hash: str) -> None:
         try:
@@ -106,6 +136,7 @@ class Database:
                             "INSERT INTO credentials VALUES (?, ?, 1, ?)",
                             [("cli", cli_hash, int(time.time())), ("browser", browser_hash, int(time.time()))],
                         )
+                        create_file_schema(connection)
                         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 finally:
                     connection.close()

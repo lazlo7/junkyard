@@ -45,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     reset = commands.add_parser("passwd", help="reset one password without knowing its old value")
     reset.add_argument("kind", choices=("cli", "browser"))
     commands.add_parser("serve", help="serve on the configured loopback address")
+    commands.add_parser("migrate", help="upgrade an initialized database without changing credentials")
     args = parser.parse_args(argv)
     try:
         settings = load_settings(args.config)
@@ -58,6 +59,9 @@ def main(argv: list[str] | None = None) -> int:
                 raise PasswordError("CLI and browser passwords must be different")
             database.initialize(hash_password(cli_password), hash_password(browser_password))
             print("Database and both credentials initialized.")
+        elif args.command == "migrate":
+            database.migrate()
+            print("Database schema is current.")
         elif args.command == "passwd":
             database.check_initialized()
             password = prompt_password(args.kind)
@@ -75,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
             database.replace_password(args.kind, hash_password(password))
             print(f"{args.kind.capitalize()} password changed.")
         else:
-            database.check_initialized()
+            database.require_file_schema()
             uvicorn.run(
                 create_app(settings),
                 host=settings.bind_host,

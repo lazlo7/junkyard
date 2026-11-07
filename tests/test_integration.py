@@ -8,6 +8,8 @@ import socket
 import subprocess
 import sys
 import time
+import json
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -61,7 +63,7 @@ def test_real_terminal_passwords_are_not_echoed(config_file):
         os.close(master)
 
 
-def test_uvicorn_and_curl_use_password_file_without_logging_secrets(database, config_file, tmp_path):
+def test_uvicorn_and_curl_authentication_and_file_lifecycle(database, config_file, tmp_path):
     assert shutil.which("curl"), "curl is required for the HTTP integration test"
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -98,6 +100,46 @@ def test_uvicorn_and_curl_use_password_file_without_logging_secrets(database, co
             )
             assert result.stdout == expected_status
             assert not result.stderr
+
+        curl_config.write_text(f'user = "admin:{CLI_PASSWORD}"\n')
+
+        def curl(*arguments, body=None):
+            result = subprocess.run(
+                ["curl", "-q", "--noproxy", "*", "--silent", "--show-error", "--fail", "--max-time", "10",
+                 "--config", str(curl_config), *arguments],
+                input=body, capture_output=True, timeout=15, check=True,
+            )
+            assert not result.stderr
+            return result.stdout
+
+        source = tmp_path / "upload sample.bin"
+        contents = bytes(range(256)) * 4096
+        source.write_bytes(contents)
+        short = json.loads(curl("-H", "Accept: application/json", "-T", str(source), base_url + "/u/"))
+        assert len(short["id"]) == 6
+        assert short["filename"] == source.name
+        assert curl("-X", "DELETE", base_url + "/" + short["id"]) == b""
+        unnamed = json.loads(curl("-H", "Accept: application/json", "-T", str(source), base_url + "/u/?s=1&e=7d"))
+        assert len(unnamed["id"]) == 32
+        assert unnamed["filename"] == unnamed["id"]
+        assert curl("-X", "DELETE", base_url + "/" + unnamed["id"]) == b""
+        uploaded = json.loads(curl("-H", "Accept: application/json", "-T", str(source),
+                                  base_url + "/u/" + quote(source.name, safe="") + "?s=1&e=7d"))
+        assert len(uploaded["id"]) == 32
+        assert uploaded["filename"] == source.name
+        assert uploaded["size"] == len(contents)
+        file_url = base_url + urlsplit(uploaded["url"]).path
+        assert curl(file_url) == contents
+        replacement = b"replacement\x00" * 12000
+        # Reading stdin makes curl stream an HTTP/1.1 chunked request.
+        assert curl("--http1.1", "-T", "-", file_url, body=replacement) == (uploaded["url"] + "\n").encode()
+        assert curl(file_url) == replacement
+        changed = json.loads(curl("-H", "Accept: application/json", "-X", "PATCH", file_url + "?name=renamed.bin&e=0"))
+        assert changed["filename"] == "renamed.bin"
+        assert changed["expires_at"] is None
+        assert curl("-X", "DELETE", file_url) == b""
+        with httpx.Client(trust_env=False) as client:
+            assert client.get(file_url).status_code == 404
     finally:
         process.terminate()
         try:

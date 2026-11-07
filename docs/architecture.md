@@ -1,6 +1,6 @@
 # Junkyard architecture
 
-Status: approved by the project owner on 2026-11-07. Milestone 1 has been implemented and is awaiting review. Later milestones have not started.
+Status: approved by the project owner on 2026-11-07. Milestone 1 is committed. Milestone 2 is implemented and awaiting review; later milestones have not started.
 
 This design builds on [requirements.md](requirements.md). Development milestones and acceptance criteria are in [implementation-plan.md](implementation-plan.md).
 
@@ -54,7 +54,14 @@ SQLite stores file metadata, credential hashes, sessions, and a schema version. 
 - Pin blobs during downloads so replacement and cleanup cannot break an active response.
 - Use short database transactions; never hold a transaction throughout a transfer.
 
-A cleanup task runs every minute. It removes expired records and unreferenced blobs, deferring blobs used by active downloads. Startup reconciliation removes abandoned uploads and checks storage consistency. Missing referenced blobs produce an operational error, not silent metadata deletion.
+A cleanup task is planned for milestone 3 and will run every minute. It will remove expired records and unreferenced blobs, deferring blobs used by active downloads. Startup reconciliation will remove abandoned uploads and check storage consistency. Missing referenced blobs produce an operational error, not silent metadata deletion.
+
+Milestone 2 implements immutable publication, revision checks, download pins,
+immediate best-effort removal of unreferenced blobs after normal operations, and
+quota accounting for all staged and stored content. Startup counts crash
+leftovers without deleting them. A filesystem lock enforces the single-worker
+boundary. Existing credential-only databases upgrade through the explicit local
+`junkyard migrate` command; new databases use schema version 2.
 
 A filesystem operation and a database transaction do not commit atomically. Publishing immutable blobs before metadata, followed by reconciliation, gives this boundary an explicit failure model. The design accepts temporary extra disk usage to make interrupted uploads and replacements safe.
 
@@ -69,8 +76,10 @@ Use a configured canonical public URL when generating links. Trust forwarded hea
 Milestone 1 adds a read-only `GET /auth/check` endpoint for verifying CLI Basic
 authentication before file operations exist. It returns `204` on success and a
 generic `401` challenge on authentication failure. This endpoint accepts only the
-CLI credential; it does not create a browser session. The file interfaces below
-remain planned for subsequent milestones.
+CLI credential; it does not create a browser session. Milestone 2 implements file
+creation, replacement, metadata edits, deletion, and basic attachment downloads.
+The table below describes the final interface; HEAD/ranges remain milestone 3,
+and HTML negotiation and previews remain milestone 4.
 
 | Operation | Interface | Behavior |
 |---|---|---|
@@ -101,13 +110,18 @@ Example commands:
 
 ```sh
 curl -u admin -T photo.jpg https://example.com/u/
-curl -u admin -T photo.jpg 'https://example.com/u/?s=1&e=7d'
+curl -u admin -T photo.jpg 'https://example.com/u/photo.jpg?s=1&e=7d'
 curl -u admin -T replacement.jpg https://example.com/ID
 curl -u admin -X PATCH 'https://example.com/ID?e=0'
 curl -u admin -X DELETE https://example.com/ID
 ```
 
-curl appends the local filename when the upload URL ends with `/`. The supplied name is display metadata, never a storage path. Document a protected, service-specific curl configuration file as the unattended alternative to prompting. See the [curl documentation](https://curl.se/docs/manpage.html).
+The curl integration test confirms that curl appends the local filename when the
+upload URL ends with `/` and has no query string. With query parameters, provide
+the filename explicitly in the path or through `name=`; otherwise the generated
+ID becomes the display name. The supplied name is display metadata, never a
+storage path. A protected, service-specific curl configuration file supports
+unattended use. See the [curl documentation](https://curl.se/docs/manpage.html).
 
 The proposed secret-header-name authentication is replaced by Basic authentication. curl treats `-H 'secretkey:'` as removing that header, header names are case-insensitive, and secret header names may escape credential redaction in logs.
 

@@ -1,6 +1,6 @@
 # Junkyard implementation plan
 
-Status: approved by the project owner on 2026-11-07. Milestone 1 has been implemented and is awaiting review. Later milestones have not started.
+Status: approved by the project owner on 2026-11-07. Milestone 1 is committed. Milestone 2 is implemented and awaiting review; later milestones have not started.
 
 The behavior, interfaces, security policies, and operational defaults are defined in [architecture.md](architecture.md), based on [requirements.md](requirements.md).
 
@@ -15,7 +15,7 @@ The behavior, interfaces, security policies, and operational defaults are define
 
 ## Milestone 1: Foundation and credentials
 
-Status: implemented; acceptance tests pass. Awaiting review before further work.
+Status: implemented and committed by the project owner; acceptance tests pass.
 
 Deliver project packaging, configuration, schema initialization, local credential commands, and Basic authentication.
 
@@ -43,6 +43,10 @@ Implementation notes:
 
 ## Milestone 2: Durable CLI file operations
 
+Status: implemented; 126 tests pass, including the Uvicorn/curl integration tests.
+Awaiting review before further work. The existing Starlette/httpx test-client
+deprecation warning remains; runtime dependencies are unchanged.
+
 Deliver streaming creation, read, replacement, metadata edits, deletion, short/long IDs, and quotas.
 
 Acceptance criteria:
@@ -54,6 +58,21 @@ Acceptance criteria:
 - Concurrent replacement and deletion obey the conflict policy.
 - Injected failures around blob publication and database commit leave recoverable state.
 - File-size and storage limits are enforced for streamed bodies.
+
+Implementation notes:
+
+- Schema version 2 adds file metadata. `junkyard migrate` transactionally upgrades
+  existing milestone 1 databases without changing credentials.
+- The single-worker storage lock coordinates quota, upload publication, revision
+  conflicts, and pinned downloads. Staging and retained blobs count toward quota.
+- File operations require CLI authentication before reading upload bodies; public
+  downloads currently serve attachments with caching and MIME sniffing disabled.
+- Interrupted requests remove staging files during normal operation. Uncertain
+  commits retain published blobs for recovery rather than risk deleting live data.
+- Expiration is stored and checked on access; periodic cleanup, full restart
+  reconciliation, HEAD, ranges, and request throttling remain milestone 3.
+- Integration tests verify curl's filename behavior: query-bearing upload URLs
+  need an explicit path filename or `name=` to preserve the original basename.
 
 ## Milestone 3: Lifecycle and HTTP behavior
 

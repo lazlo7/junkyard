@@ -87,3 +87,16 @@ def test_serve_uses_private_single_worker_defaults(database, config_file, monkey
     assert calls == [{"host": "127.0.0.1", "port": 8000, "workers": 1,
                       "proxy_headers": False, "access_log": False, "server_header": False}]
 
+
+def test_migrate_command_upgrades_without_password_prompts(database, config_file, monkeypatch, capsys):
+    original_hash = database.password_hash("cli")
+    with database.connect() as connection, connection:
+        connection.execute("DROP TABLE files")
+        connection.execute("PRAGMA user_version = 1")
+    monkeypatch.setattr("junkyard.cli.getpass.getpass", lambda prompt: pytest.fail("migration must not prompt for credentials"))
+    assert cli.main(["--config", str(config_file), "serve"]) == 1
+    assert "migrate" in capsys.readouterr().err
+    assert cli.main(["--config", str(config_file), "migrate"]) == 0
+    database.require_file_schema()
+    assert database.password_hash("cli") == original_hash
+

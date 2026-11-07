@@ -16,6 +16,9 @@ class Settings:
     data_dir: Path
     bind_host: str = "127.0.0.1"
     bind_port: int = 8000
+    max_file_bytes: int = 250 * 1024 * 1024
+    storage_quota_bytes: int = 100 * 1024 * 1024 * 1024
+    max_transfers: int = 4
 
     def __post_init__(self) -> None:
         if not isinstance(self.public_url, str):
@@ -47,6 +50,10 @@ class Settings:
             raise ConfigError("bind_host must be 127.0.0.1 or ::1; use an HTTPS reverse proxy")
         if type(self.bind_port) is not int or not 1 <= self.bind_port <= 65535:
             raise ConfigError("bind_port must be an integer between 1 and 65535")
+        for name in ("max_file_bytes", "storage_quota_bytes", "max_transfers"):
+            value = getattr(self, name)
+            if type(value) is not int or not 0 < value <= 2**63 - 1:
+                raise ConfigError(f"{name} must be a positive 64-bit integer")
 
 
 def load_settings(path: Path) -> Settings:
@@ -57,7 +64,7 @@ def load_settings(path: Path) -> Settings:
         raise ConfigError("cannot read configuration file; specify --config PATH") from None
     except tomllib.TOMLDecodeError:
         raise ConfigError("configuration file is not valid TOML") from None
-    if set(values) - {"public_url", "data_dir", "bind_host", "bind_port"}:
+    if set(values) - set(Settings.__dataclass_fields__):
         raise ConfigError("configuration contains unsupported keys")
     if "public_url" not in values:
         raise ConfigError("public_url is required")
@@ -72,5 +79,8 @@ def load_settings(path: Path) -> Settings:
         data_dir=directory,
         bind_host=values.get("bind_host", "127.0.0.1"),
         bind_port=values.get("bind_port", 8000),
+        max_file_bytes=values.get("max_file_bytes", 250 * 1024 * 1024),
+        storage_quota_bytes=values.get("storage_quota_bytes", 100 * 1024 * 1024 * 1024),
+        max_transfers=values.get("max_transfers", 4),
     )
 

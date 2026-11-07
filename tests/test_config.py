@@ -21,6 +21,8 @@ def test_invalid_public_urls_are_rejected_without_echoing_values(tmp_path, url):
     'bind_port = 65536', 'bind_port = true', 'bind_port = "8000"',
     'password = "do-not-repeat-this-secret"', 'data_dir = 42',
     'data_dir = "../elsewhere"', 'data_dir = "~/personal"',
+    'max_file_bytes = 0', 'max_file_bytes = true', 'storage_quota_bytes = -1',
+    'max_transfers = 0', 'storage_quota_bytes = 9223372036854775808',
 ])
 def test_invalid_settings_fail_clearly(tmp_path, extra):
     config = tmp_path / "invalid.toml"

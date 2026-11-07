@@ -7,11 +7,27 @@ import threading
 
 from argon2 import PasswordHasher, Type
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+from fastapi import HTTPException, Request
 
 from junkyard.database import Database, StoreError
 
 MAX_PASSWORD_BYTES = 1024
 PASSWORD_HASHER = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=1, type=Type.ID)
+CHALLENGE = {"WWW-Authenticate": 'Basic realm="junkyard-cli", charset="UTF-8"', "Cache-Control": "no-store"}
+
+
+def require_cli(request: Request) -> None:
+    credentials = decode_basic(request.headers.getlist("authorization"))
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Invalid CLI credentials", headers=CHALLENGE)
+    try:
+        valid = request.app.state.cli_authenticator.verify(*credentials)
+    except AuthenticationBusy:
+        raise HTTPException(status_code=503, detail="Authentication busy", headers={"Retry-After": "1", "Cache-Control": "no-store"}) from None
+    except StoreError:
+        raise HTTPException(status_code=503, detail="Authentication unavailable", headers={"Cache-Control": "no-store"}) from None
+    if not valid:
+        raise HTTPException(status_code=401, detail="Invalid CLI credentials", headers=CHALLENGE)
 
 
 class PasswordError(ValueError):
