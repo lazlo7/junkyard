@@ -1,6 +1,6 @@
 # Junkyard implementation plan
 
-Status: approved by the project owner on 2026-11-07. Implementation has not started and remains paused until explicitly requested.
+Status: approved by the project owner on 2026-11-07. Milestone 1 has been implemented and is awaiting review. Later milestones have not started.
 
 The behavior, interfaces, security policies, and operational defaults are defined in [architecture.md](architecture.md), based on [requirements.md](requirements.md).
 
@@ -15,6 +15,8 @@ The behavior, interfaces, security policies, and operational defaults are define
 
 ## Milestone 1: Foundation and credentials
 
+Status: implemented; acceptance tests pass. Awaiting review before further work.
+
 Deliver project packaging, configuration, schema initialization, local credential commands, and Basic authentication.
 
 Acceptance criteria:
@@ -24,6 +26,20 @@ Acceptance criteria:
 - Passwords are never stored or logged in plaintext.
 - CLI and browser credentials remain separate.
 - Local initialization and recovery use hidden password prompts.
+
+Implementation notes:
+
+- Python 3.12.3, the existing `.venv`, and uv project management with `uv.lock`.
+- Strict TOML configuration and a versioned SQLite schema containing the two
+  credential records; future tables will be added with their respective milestones.
+- `junkyard init`, `junkyard passwd cli|browser`, and `junkyard serve` commands.
+- A read-only `/auth/check` endpoint tests Basic authentication independently of
+  future file operations. Expensive hash checks run outside the event loop with
+  at most two concurrent verifications; rate-based throttling remains milestone 3.
+- Passwords require hidden confirmation, at least 12 printable characters, and
+  at most 1024 UTF-8 bytes. CLI and browser passwords must differ.
+- Automated checks include real terminal echo suppression and Uvicorn/curl
+  authentication using a protected password file.
 
 ## Milestone 2: Durable CLI file operations
 

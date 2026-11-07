@@ -1,0 +1,3 @@
+include junkyard.example.toml uv.lock
+recursive-include tests *.py
+recursive-include docs *.md

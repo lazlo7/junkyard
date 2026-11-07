@@ -1,0 +1,8 @@
+# Copy to junkyard.toml and set the externally visible HTTPS origin.
+public_url = "https://files.example.com"
+# Relative paths are relative to this configuration file, not the working directory.
+# Its parent must exist. `junkyard init` creates this directory with mode 0700.
+data_dir = "data"
+bind_host = "127.0.0.1"
+bind_port = 8000
+

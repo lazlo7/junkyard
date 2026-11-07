@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "junkyard"
+version = "0.1.0"
+description = "A personal, CLI-centric HTTP file server"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "argon2-cffi>=25.1,<26",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.34,<1",
+]
+
+[project.scripts]
+junkyard = "junkyard.cli:main"
+
+[dependency-groups]
+dev = ["httpx>=0.28,<1", "pytest>=8,<10"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+

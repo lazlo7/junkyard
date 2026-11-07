@@ -1,6 +1,6 @@
 # Junkyard architecture
 
-Status: approved by the project owner on 2026-11-07. Implementation has not started and remains paused until explicitly requested.
+Status: approved by the project owner on 2026-11-07. Milestone 1 has been implemented and is awaiting review. Later milestones have not started.
 
 This design builds on [requirements.md](requirements.md). Development milestones and acceptance criteria are in [implementation-plan.md](implementation-plan.md).
 
@@ -65,6 +65,12 @@ Provide a documented Nginx configuration and systemd service example. Run the ap
 Use a configured canonical public URL when generating links. Trust forwarded headers only from the configured proxy. The proxy must never serve the private storage directory directly.
 
 ## HTTP interfaces
+
+Milestone 1 adds a read-only `GET /auth/check` endpoint for verifying CLI Basic
+authentication before file operations exist. It returns `204` on success and a
+generic `401` challenge on authentication failure. This endpoint accepts only the
+CLI credential; it does not create a browser session. The file interfaces below
+remain planned for subsequent milestones.
 
 | Operation | Interface | Behavior |
 |---|---|---|
