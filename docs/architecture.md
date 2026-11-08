@@ -1,6 +1,6 @@
 # Junkyard architecture
 
-Status: approved by the project owner on 2026-11-07. Milestones 1–4 are complete. Milestone 5 is implemented and awaiting review; milestone 6 has not started.
+Status: approved by the project owner on 2026-11-07. Milestones 1–5 are complete. Milestone 6 is implemented and awaiting review; no live deployment has been performed.
 
 This design builds on [requirements.md](requirements.md). Development milestones and acceptance criteria are in [implementation-plan.md](implementation-plan.md).
 
@@ -36,7 +36,7 @@ flowchart LR
 
 Use one Uvicorn worker, with bounded concurrent transfers. Run synchronous database and filesystem operations outside the async event loop. FastAPI supports the required [streaming responses](https://fastapi.tiangolo.com/advanced/custom-response/) and [Jinja2 templates](https://fastapi.tiangolo.com/advanced/templates/).
 
-Direct runtime dependencies will be FastAPI, Uvicorn, Jinja2, and `argon2-cffi`. Use Python's `sqlite3` interface and explicit SQL, without an ORM. Use small amounts of browser JavaScript for file uploads, CSRF-protected requests, and copying share links. No frontend build system.
+Direct runtime dependencies are FastAPI, Uvicorn, Jinja2, and `argon2-cffi`. Use Python's `sqlite3` interface and explicit SQL, without an ORM. Use small amounts of browser JavaScript for file uploads, CSRF-protected requests, and copying share links. No frontend build system.
 
 Organize code around HTTP handlers, authentication, file operations, persistence, and templates. Both browser and CLI handlers call the same file-operation functions. Avoid generic storage backends, plugin systems, or repository interfaces.
 
@@ -77,6 +77,32 @@ A filesystem operation and a database transaction do not commit atomically. Publ
 Provide a documented Nginx configuration and systemd service example. Run the application as an unprivileged account on a loopback address; only the proxy accepts public traffic.
 
 Use a configured canonical public URL when generating links. Trust forwarded headers only from the configured proxy. The proxy must never serve the private storage directory directly.
+
+Milestone 6 supplies a dedicated [Nginx configuration](../deploy/nginx.conf),
+[systemd unit](../deploy/junkyard.service), and [production settings](../deploy/junkyard.toml).
+The proxy overwrites the client IP, streams requests/responses without buffering
+or caching, uses the same byte limit as the application, and disables retries.
+The service has a dedicated unprivileged account, read-only code/configuration,
+private state storage, and no capabilities. TLS keys belong only to the proxy.
+See the [deployment guide](deployment.md) for installation and host validation.
+
+Request logging records only generated correlation IDs, fixed operation labels,
+normalized methods, status, duration, and completion outcome. Responses return
+the application ID as `X-Request-ID`. Uvicorn uses a private formatter that omits
+arbitrary messages and exception tracebacks. Nginx records only time, IDs, status,
+and duration; its unredacted error log is suppressed because it can contain URLs.
+This sacrifices detailed production exception/proxy text to preserve link and
+credential privacy. Debugging uses safe events and reproduction with synthetic
+data. Automatic slash redirects are disabled to prevent HTTP redirects behind
+TLS termination while forwarded-scheme parsing remains disabled.
+
+Backups use a quiescent, complete copy of the data directory, with checksums and
+configuration/version information retained alongside it. Restore occurs into a
+fresh directory, with integrity checks and a loopback verification instance
+before cutover. Restored sessions are revoked through browser-password reset;
+CLI credentials may also need resetting if a snapshot predates their rotation.
+See [backup and restore](backup-restore.md). No online backup service, dependency,
+or schema change is introduced in milestone 6.
 
 ## HTTP interfaces
 

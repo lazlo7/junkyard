@@ -1,14 +1,23 @@
 # Junkyard
 
+> [!WARNING]
+> This is an entirely vibe-coded project! GPT-6-Astra w/ high reasoning was used.  
+> Use at your own risk (or better **don't use at all**). Verify the code.  
+> I did this to check out LLM capabilities.
+
 A personal, self-hosted, CLI-centric file server. The approved design is in
 [docs/architecture.md](docs/architecture.md), with milestones in
 [docs/implementation-plan.md](docs/implementation-plan.md).
 
-Milestones 1–5 provide configuration, private SQLite storage, password
+Milestones 1–6 provide configuration, private SQLite storage, password
 administration, Basic authentication, streaming CLI file operations, expiration
-cleanup and recovery, HEAD/range downloads, request throttling, and a public
-browser viewer, and secured browser administration. Deployment and release
-checks remain milestone 6.
+cleanup and recovery, HEAD/range downloads, request throttling, a public browser
+viewer, and secured browser administration. Deployment examples, private
+operational logging, backup/restore instructions, and release checks are included.
+
+- [Deployment and operational diagnostics](docs/deployment.md)
+- [curl usage guide](docs/curl.md)
+- [Offline backup and restore](docs/backup-restore.md)
 
 ## Development setup
 
@@ -90,11 +99,17 @@ For an alternative configuration file, put the global option before the command:
 ```
 
 The server refuses to start without both initialized credentials. It runs one
-worker, enforced by a storage lock, and binds to `127.0.0.1:8000` by default; `::1` is also supported. HTTP access
-logging and Uvicorn's implicit proxy-header handling are disabled. The application
+worker, enforced by a storage lock, and binds to `127.0.0.1:8000` by default; `::1`
+is also supported. Raw HTTP access logging and Uvicorn's implicit proxy-header
+handling are disabled. Safe JSON operational records include fixed operation
+labels, status, duration, outcome, and generated request IDs, without URLs,
+filenames, credentials, cookies, or exception text. The application
 only trusts client-address headers from explicitly configured proxy peers (see
-below). Public exposure requires the HTTPS reverse proxy described by the
-architecture; complete deployment examples remain milestone 6.
+below). Public exposure requires the HTTPS reverse proxy in the
+[deployment guide](docs/deployment.md), with the supplied Nginx and systemd
+examples. Use `junkyard serve` so the private logging configuration is installed.
+Automatic trailing-slash redirects are disabled to avoid an HTTP downgrade
+behind TLS termination; use documented paths and explicit aliases.
 
 The read-only `GET /auth/check` endpoint returns `204` for the fixed username
 `admin` and the CLI password. It returns a generic `401` challenge for missing,
@@ -399,6 +414,15 @@ rollback. These optional tools are test tools, not application dependencies.
 Integration tests require Linux pseudo-terminals,
 loopback sockets, and curl. A restrictive sandbox may need to permit those
 capabilities to run the tests.
+
+Release checks also require Nginx, OpenSSL, and `systemd-analyze`. They exercise
+the actual proxy configuration over HTTPS, matched upload limits, streaming,
+trusted client-IP handling, log privacy, and private-path rejection; validate the
+service unit without installing it; and restore an offline copy. Four concurrent
+32 MiB uploads/downloads must complete with bounded transfer-phase RSS growth,
+while a fifth is rejected. These checks run unprivileged on loopback high ports
+and create no host services. Missing optional tools produce skips; a release
+verification requires the applicable checks to run, not skip.
 
 Local configuration, the default data directory, virtual environments, caches,
 and build artifacts are ignored by Git. Keep any custom data directory and

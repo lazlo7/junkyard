@@ -154,6 +154,10 @@ def test_uvicorn_and_curl_authentication_and_file_lifecycle(database, config_fil
         changed = json.loads(curl("-H", "Accept: application/json", "-X", "PATCH", file_url + "?name=renamed.bin&e=0"))
         assert changed["filename"] == "renamed.bin"
         assert changed["expires_at"] is None
+        encoded = json.loads(curl("-H", "Accept: application/json", "-G", "-X", "PATCH",
+                                  "--data-urlencode", "name=report final.txt", "--data-urlencode", "e=7d", file_url))
+        assert encoded["filename"] == "report final.txt"
+        assert encoded["expires_at"] is not None
         assert curl("-X", "DELETE", file_url) == b""
         with httpx.Client(trust_env=False) as client:
             assert client.get(file_url).status_code == 404

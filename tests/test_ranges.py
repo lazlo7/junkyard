@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from junkyard.app import create_app
-from conftest import CLI_PASSWORD
+from conftest import CLI_PASSWORD, representation_headers
 
 CONTENT = b"0123456789abcdef"
 
@@ -26,7 +26,7 @@ def test_head_matches_get_without_body_or_pin_leak(client, suffix):
     head = client.head(path)
     assert head.status_code == full.status_code == 200
     assert head.content == b""
-    assert dict(head.headers) == dict(full.headers)
+    assert representation_headers(head) == representation_headers(full)
     assert head.headers["accept-ranges"] == "bytes"
     assert not client.app.state.files._pins
     assert client.app.state.files._transfers == 0

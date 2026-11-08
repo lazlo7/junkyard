@@ -1,0 +1,39 @@
+[Unit]
+Description=Junkyard private file server
+After=network.target
+
+[Service]
+Type=simple
+User=junkyard
+Group=junkyard
+WorkingDirectory=/opt/junkyard
+ExecStart=/opt/junkyard/.venv/bin/junkyard --config /etc/junkyard/junkyard.toml serve
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+StateDirectory=junkyard
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=90
+KillMode=control-group
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+SystemCallArchitectures=native
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -81,11 +81,13 @@ def test_serve_refuses_missing_credentials(config_file, monkeypatch):
 
 
 def test_serve_uses_private_single_worker_defaults(database, config_file, monkeypatch):
+    from junkyard.operations import LOG_CONFIG
     calls = []
     monkeypatch.setattr("junkyard.cli.uvicorn.run", lambda app, **kwargs: calls.append(kwargs))
     assert cli.main(["--config", str(config_file), "serve"]) == 0
     assert calls == [{"host": "127.0.0.1", "port": 8000, "workers": 1,
-                      "proxy_headers": False, "access_log": False, "server_header": False}]
+                      "proxy_headers": False, "access_log": False, "server_header": False,
+                      "log_config": LOG_CONFIG, "timeout_graceful_shutdown": 30}]
 
 
 def test_migrate_command_upgrades_without_password_prompts(database, config_file, monkeypatch, capsys):

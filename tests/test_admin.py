@@ -4,7 +4,7 @@ import re
 from fastapi.testclient import TestClient
 import pytest
 
-from conftest import BROWSER_PASSWORD, CLI_PASSWORD
+from conftest import BROWSER_PASSWORD, CLI_PASSWORD, representation_headers
 from junkyard.app import create_app
 from junkyard.browser_auth import LOGIN_COOKIE, SESSION_COOKIE, IDLE_SECONDS
 from junkyard.file_options import FileOptions
@@ -77,7 +77,7 @@ def test_admin_file_lifecycle_and_rotation(client, database):
     page = client.get("/admin/")
     assert "renamed.txt" in page.text and "11" in page.text
     head = client.head("/admin/")
-    assert not head.content and head.headers == page.headers
+    assert not head.content and representation_headers(head) == representation_headers(page)
     payload = {"browser_password": BROWSER_PASSWORD, "new_password": "new CLI passphrase test",
                "confirmation": "new CLI passphrase test"}
     assert client.post("/admin/cli-password", json=payload, headers=headers).status_code == 204

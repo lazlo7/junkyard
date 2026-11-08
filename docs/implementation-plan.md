@@ -1,6 +1,6 @@
 # Junkyard implementation plan
 
-Status: approved by the project owner on 2026-11-07. Milestones 1–4 are complete. Milestone 5 is implemented and awaiting review; milestone 6 has not started.
+Status: approved by the project owner on 2026-11-07. Milestones 1–5 are complete. Milestone 6 is implemented and awaiting review; no live deployment has been performed.
 
 The behavior, interfaces, security policies, and operational defaults are defined in [architecture.md](architecture.md), based on [requirements.md](requirements.md).
 
@@ -152,7 +152,7 @@ Implementation notes:
 
 ## Milestone 5: Browser administration
 
-Status: implemented and awaiting review; all 308 tests pass, including the full
+Status: complete and accepted for continuation to milestone 6; all 308 tests passed, including the full
 admin workflow in Chrome over loopback HTTPS. Wheel and source distribution
 contents were verified. The existing Starlette/httpx deprecation warning remains.
 
@@ -194,6 +194,13 @@ Implementation notes:
 
 ## Milestone 6: Deployment and release checks
 
+Status: implemented and awaiting review. All 319 tests passed with no skips,
+including Nginx HTTPS, Chrome administration, concurrent transfer memory,
+crash recovery, offline restore, and log privacy checks. The service unit passed
+systemd-analyze validation; wheel/source distribution contents were verified.
+The existing Starlette/httpx deprecation warning remains. No host service has
+been installed or started, and target-host deployment remains an operator action.
+
 Deliver proxy/service examples, a curl usage guide, backup/restore instructions, and operational logging.
 
 Acceptance criteria:
@@ -205,6 +212,31 @@ Acceptance criteria:
 - A backup can restore both metadata and file contents consistently.
 - Logs omit credentials, session tokens, filenames, and shared URLs.
 - Deployment runs without elevated application privileges and does not expose the blob directory directly.
+
+Implementation notes:
+
+- Complete Nginx/systemd/production-settings examples specify HTTPS termination,
+  a single trusted proxy, loopback backend, matched byte limits, streaming in
+  both directions, disabled retries, and an unprivileged application account.
+- New operator guides cover deployment, curl commands, log diagnostics, and
+  offline backup/restore with checksums and revocation of restored sessions.
+- Application JSON logs use generated IDs and fixed operation labels without
+  request strings or exception text. Proxy logs omit URLs/credentials; Nginx's
+  unredacted error log is deliberately suppressed. Request IDs are returned in
+  response headers for correlation.
+- Automatic slash redirects are disabled so TLS termination cannot produce an
+  HTTP downgrade; supported explicit aliases and relative redirects remain.
+- Real Nginx HTTPS checks verify streaming before body completion, byte limits,
+  proxy-header spoof rejection, private-path rejection, and log privacy during
+  success/failure. systemd-analyze validates the service syntax without installing
+  it. The test processes run under the ordinary non-root user.
+- Four simultaneous 32 MiB uploads/downloads complete with less than 32 MiB of
+  transfer-phase RSS growth; a fifth transfer is rejected. Existing crash tests
+  remain part of the full suite. Offline copies restore metadata, content,
+  credentials, and original expiry, while incomplete copies fail closed.
+- No dependencies or database migrations are added. Host-specific service
+  isolation, firewall, certificate renewal, and reboot checks remain necessary
+  when the operator installs the service on its target host.
 
 ## Scope and completion
 

@@ -13,6 +13,7 @@ from junkyard.database import Database
 from junkyard.file_routes import install_file_routes
 from junkyard.files import FileStore
 from junkyard.lifecycle import cleanup_loop
+from junkyard.operations import OperationLogging
 from junkyard.presentation import install_assets
 from junkyard.rate_limits import RequestLimits
 from junkyard.request_protection import RequestProtection
@@ -38,7 +39,10 @@ def create_app(settings: Settings) -> FastAPI:
             finally:
                 await run_in_threadpool(files.close)
 
-    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    # Proxy headers deliberately do not alter ASGI's scheme. Automatic slash
+    # redirects could therefore downgrade HTTPS requests to HTTP; use explicit
+    # aliases/relative redirects only.
+    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None, redirect_slashes=False)
     app.state.cli_authenticator = CLIAuthenticator(database)
     app.state.browser_auth = BrowserAuth(database, app.state.cli_authenticator)
     app.state.files = files
@@ -46,6 +50,7 @@ def create_app(settings: Settings) -> FastAPI:
     app.add_middleware(RequestProtection, settings=settings,
                        authenticator=app.state.cli_authenticator, limits=app.state.limits,
                        browser_auth=app.state.browser_auth)
+    app.add_middleware(OperationLogging)
 
     @app.get("/auth/check", dependencies=[Depends(require_cli)], status_code=204)
     def check_authentication() -> Response:

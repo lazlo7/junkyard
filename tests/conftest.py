@@ -8,6 +8,11 @@ CLI_PASSWORD = "test CLI passphrase: alpha"
 BROWSER_PASSWORD = "test browser passphrase beta"
 
 
+def representation_headers(response):
+    """Per-request correlation IDs are intentionally different on GET and HEAD."""
+    return {key: value for key, value in response.headers.items() if key != "x-request-id"}
+
+
 class FakeClock:
     def __init__(self, now=1700000000.0):
         self.now = now

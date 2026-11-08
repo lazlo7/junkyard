@@ -10,7 +10,7 @@ from junkyard.app import create_app
 from junkyard.file_options import FileOptions
 from junkyard.presentation import ASSETS, wants_html
 from junkyard.previews import TEXT_LIMIT, inspect_preview
-from conftest import CLI_PASSWORD
+from conftest import CLI_PASSWORD, representation_headers
 
 HTML = {"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
 PNG = bytes.fromhex(
@@ -78,7 +78,7 @@ def test_viewer_metadata_controls_canonical_share_link_and_head(client):
     assert "attacker.invalid" not in response.text
     head = client.head(path, headers=HTML)
     assert head.content == b""
-    assert dict(head.headers) == dict(response.headers)
+    assert representation_headers(head) == representation_headers(response)
     assert not client.app.state.files._pins
     assert client.app.state.files._transfers == 0
     for suffix in ("", "/raw", "/download"):
@@ -156,7 +156,7 @@ def test_media_preview_raw_headers_and_seeking(client, name, body, kind, mime):
     assert raw.headers["content-disposition"].startswith("inline;")
     head = client.head(path + "/raw", headers=HTML)
     assert head.content == b""
-    assert dict(head.headers) == dict(raw.headers)
+    assert representation_headers(head) == representation_headers(raw)
     ranged = client.get(path + "/raw", headers={"Range": "bytes=1-3", "If-Range": raw.headers["etag"]})
     assert ranged.status_code == 206
     assert ranged.content == body[1:4]
@@ -198,7 +198,7 @@ def test_negotiated_errors_and_head_preserve_status_and_headers(client):
             assert response.headers["content-type"].startswith(media)
             head = client.head(path, headers=accept)
             assert head.status_code == 404 and not head.content
-            assert dict(head.headers) == dict(response.headers)
+            assert representation_headers(head) == representation_headers(response)
     for suffix in ("/raw", "/download"):
         response = client.get("/NoSuch" + suffix, headers=HTML)
         assert response.status_code == 404
@@ -219,7 +219,7 @@ def test_throttle_errors_and_fixed_assets(settings, database):
             response = client.get(asset)
             assert response.status_code == 200
             assert response.headers["x-content-type-options"] == "nosniff"
-            assert client.head(asset).headers == response.headers
+            assert representation_headers(client.head(asset)) == representation_headers(response)
             assert client.head(asset).content == b""
         limited = client.get(path, headers=HTML)
         assert limited.status_code == 429

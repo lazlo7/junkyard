@@ -12,6 +12,7 @@ import uvicorn
 from junkyard.app import create_app
 from junkyard.config import ConfigError, load_settings
 from junkyard.database import Database, StoreError
+from junkyard.operations import LOG_CONFIG
 from junkyard.security import PASSWORD_HASHER, PasswordError, hash_password, validate_password
 
 
@@ -88,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
                 proxy_headers=False,
                 access_log=False,
                 server_header=False,
+                log_config=LOG_CONFIG,
+                timeout_graceful_shutdown=30,
             )
     except (ConfigError, StoreError, PasswordError) as error:
         print(f"Error: {error}", file=sys.stderr)

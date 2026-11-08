@@ -13,7 +13,7 @@ cleanup_interval_seconds = 60
 # Anonymous GET/HEAD requests: token refill per second and maximum burst.
 anonymous_rate = 1.0
 anonymous_burst = 10
-# Failed CLI authentication: burst and sustained failures per minute.
+# Failed CLI/browser authentication: burst and sustained failures per minute.
 auth_failures_per_minute = 5
 # Maximum tracked IP addresses in each limiter; idle entries expire.
 rate_limit_max_ips = 10000
