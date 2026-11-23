@@ -133,7 +133,14 @@ derived from immutable blob identity and revision supports `If-Range` without
 exposing the storage filename. Date-based or weak validators receive a full
 response because multiple modifications may occur within one second.
 
-All CLI mutations require Basic authentication. Browser administration uses separate `/admin/` routes with session and CSRF checks; cookies do not authorize CLI mutation routes.
+The CLI password authorizes all file mutations through HTTP Basic. For a periodic
+job, the admin can issue a bearer token through `POST /admin/files/{id}/token` and
+revoke it with `DELETE` on the same route. Both actions use the browser session,
+origin, and CSRF checks. Schema version 4 stores the SHA-256 digest on the file
+row. A token authorizes only a query-free `PUT /{id}` for its live file. The
+server verifies it before reading the body and in the SQLite transaction that
+commits the replacement. Invalid token attempts share the CLI authentication
+rate limit.
 
 Parameters:
 

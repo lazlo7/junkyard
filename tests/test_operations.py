@@ -7,12 +7,18 @@ from fastapi.testclient import TestClient
 import pytest
 
 from junkyard.app import create_app
-from junkyard.operations import OperationLogging, PrivateFormatter, RequestFailed
+from junkyard.operations import OperationLogging, PrivateFormatter, RequestFailed, operation
 from conftest import CLI_PASSWORD
 
 
 def request_records(caplog):
     return [json.loads(PrivateFormatter().format(record)) for record in caplog.records if record.name == "junkyard.requests"]
+
+
+def test_file_token_log_labels():
+    path = "/admin/files/AbCdEf/token"
+    assert operation({"method": "POST", "path": path}) == "file_token_generate"
+    assert operation({"method": "DELETE", "path": path}) == "file_token_revoke"
 
 
 def test_safe_logging_on_success_auth_failure_throttle_and_bad_method(settings, database, caplog):

@@ -35,15 +35,15 @@ already exist; the data directory itself will be created privately by `init`.
 Unknown configuration keys, invalid types, non-HTTPS public origins, URLs with
 credentials or paths, and non-loopback bind addresses are rejected.
 
-Existing milestone 1–4 databases require a schema upgrade. Stop the server and
+Existing databases on schema versions 1–3 require an upgrade. Stop the server and
 back up the data directory, then run:
 
 ```sh
 .venv/bin/uv run --locked junkyard migrate
 ```
 
-The upgrade transactionally adds the missing tables and preserves existing
-files and both credentials. Milestone 5 uses schema version 3 for browser sessions.
+Schema version 4 adds an optional token hash to each file. The upgrade preserves
+existing files and credentials. All existing files start without a file token.
 Running it again is harmless. New `init` commands create the current schema
 directly; the server refuses an old schema until it is migrated.
 
@@ -144,6 +144,9 @@ version control and use them only with the intended service. The application
 does not accept HTTP Basic credentials through query parameters.
 
 ## Manage files with curl
+
+For a job that periodically replaces one file, generate a token for that file in
+the browser dashboard. See the [curl automation example](docs/curl.md#update-one-link-from-automation).
 
 These examples use password prompting; the protected curl configuration above
 can be used instead. Uploads are raw bytes, not multipart forms.
@@ -286,6 +289,10 @@ The dashboard provides:
   you change metadata or select replacement contents. An omitted lifetime
   preserves the existing expiration; a supplied lifetime starts from the update.
 - Confirmed deletion and sign-out.
+- An **Automation token** control on each live file. **Generate file token**
+  displays the secret once. It authorizes content-only replacements at that file’s
+  URL until revoked or the file expires or is deleted. **Revoke file token** lets
+  the admin withdraw access independently of either password.
 - CLI-password rotation with the current browser password and confirmation of
   the new CLI password. The two passwords must remain different.
 
@@ -405,8 +412,9 @@ throttle exemptions, and error responses. If Chrome/Chromium is installed, an
 optional headless smoke test renders the viewer with an isolated project-local
 profile and checks that its share script loads. It is skipped otherwise.
 With Chrome/Chromium, Node 22+, and OpenSSL installed, a second optional browser
-test exercises login, upload, metadata editing, replacement, CLI-password
-rotation, deletion, and logout over loopback HTTPS. It uses a synthetic test
+test exercises login, upload, file token generation and revocation, a scoped
+curl replacement, metadata editing, CLI-password rotation, deletion, and logout
+over loopback HTTPS. It uses a synthetic test
 certificate, isolated profile, and Node's built-in WebSocket; no npm packages
 are needed. Session tests cover idle/absolute expiry, restart persistence,
 reset races, CSRF rejection before body reads, bounded state, and migration

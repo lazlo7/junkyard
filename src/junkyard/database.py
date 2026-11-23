@@ -10,7 +10,11 @@ import time
 from typing import Iterator, Literal
 
 CredentialKind = Literal["cli", "browser"]
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+
+def add_file_token_column(connection: sqlite3.Connection) -> None:
+    connection.execute("ALTER TABLE files ADD COLUMN file_token_hash TEXT")
 
 
 def create_session_schema(connection: sqlite3.Connection) -> None:
@@ -94,7 +98,7 @@ class Database:
             connection = sqlite3.connect(self.path.as_uri() + "?mode=rw", uri=True, timeout=5)
             try:
                 connection.row_factory = sqlite3.Row
-                if connection.execute("PRAGMA user_version").fetchone()[0] not in (1, 2, SCHEMA_VERSION):
+                if connection.execute("PRAGMA user_version").fetchone()[0] not in range(1, SCHEMA_VERSION + 1):
                     raise StoreError("unsupported database schema version")
                 yield connection
             finally:
@@ -123,6 +127,8 @@ class Database:
                 create_file_schema(connection)
             if version < 3:
                 create_session_schema(connection)
+            if version < 4:
+                add_file_token_column(connection)
                 connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def initialize(self, cli_hash: str, browser_hash: str) -> None:
@@ -154,6 +160,7 @@ class Database:
                         )
                         create_file_schema(connection)
                         create_session_schema(connection)
+                        add_file_token_column(connection)
                         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 finally:
                     connection.close()

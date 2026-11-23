@@ -8,9 +8,12 @@ from starlette.requests import Request
 from junkyard.config import Settings
 from junkyard.browser_auth import BrowserAuth, SESSION_COOKIE, cookie
 from junkyard.database import StoreError
+from junkyard.file_options import FILE_ID_PATTERN
 from junkyard.presentation import ASSETS, error_response
 from junkyard.rate_limits import RateLimited, RequestLimits
-from junkyard.security import CHALLENGE, AuthenticationBusy, CLIAuthenticator, decode_basic
+from junkyard.security import (
+    CHALLENGE, FILE_CHALLENGE, TOKEN_PATTERN, AuthenticationBusy, CLIAuthenticator, decode_basic, token_hash,
+)
 
 
 def normalized_ip(value: str):
@@ -49,6 +52,23 @@ class RequestProtection:
         response = error_response(request, status, detail, headers)
         await response(request.scope, receive, send)
 
+    async def _authenticate(self, request: Request, authorization: list[str]) -> tuple[int, str, dict] | None:
+        file_id = request.scope["path"].removeprefix("/")
+        if request.method == "PUT" and FILE_ID_PATTERN.fullmatch(file_id) and len(authorization) == 1:
+            scheme, _, token = authorization[0].partition(" ")
+            if scheme.lower() == "bearer":
+                if TOKEN_PATTERN.fullmatch(token):
+                    digest = token_hash(token)
+                    if await run_in_threadpool(request.app.state.files.verify_file_token, file_id, digest):
+                        request.state.file_token_digest = digest
+                        return None
+                return (401, "Invalid file token", FILE_CHALLENGE)
+        credentials = decode_basic(authorization)
+        if credentials is not None and await run_in_threadpool(self.authenticator.verify, *credentials):
+            request.state.cli_authenticated = True
+            return None
+        return (401, "Invalid CLI credentials", CHALLENGE)
+
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
@@ -56,6 +76,7 @@ class RequestProtection:
         request = Request(scope)
         state = scope.setdefault("state", {})
         state["cli_authenticated"] = False
+        state["file_token_digest"] = None
         state["browser_session"] = None
         try:
             client_ip = self.client_ip(request)
@@ -75,13 +96,8 @@ class RequestProtection:
                 refund = True
                 failure = None
                 try:
-                    credentials = decode_basic(authorization)
-                    valid = credentials is not None and await run_in_threadpool(self.authenticator.verify, *credentials)
-                    if valid:
-                        state["cli_authenticated"] = True
-                    else:
-                        refund = False
-                        failure = (401, "Invalid CLI credentials", CHALLENGE)
+                    failure = await self._authenticate(request, authorization)
+                    refund = failure is None
                 except AuthenticationBusy:
                     failure = (503, "Authentication busy", {"Retry-After": "1"})
                 except StoreError:

@@ -40,6 +40,18 @@
           <p class="form-status" role="status" aria-live="polite"></p>
         </form>
       </details>
+      <details class="file-token" data-id="{{ file.id }}">
+        <summary>Automation token</summary>
+        <p>This token lets a job replace the contents of this file at its existing link.</p>
+        <button type="button" class="generate-token"{% if file.has_token %} hidden{% endif %}>Generate file token</button>
+        <button type="button" class="revoke-token"{% if not file.has_token %} hidden{% endif %}>Revoke file token</button>
+        <div class="token-secret" hidden>
+          <label for="token-{{ file.id }}">File token · Copy before leaving this page</label>
+          <input id="token-{{ file.id }}" type="text" readonly autocomplete="off" spellcheck="false">
+          <button type="button" class="copy-token">Copy</button>
+        </div>
+        <p class="form-status" role="status" aria-live="polite">{% if file.has_token %}Token active.{% endif %}</p>
+      </details>
       <button type="button" class="delete-file" data-id="{{ file.id }}">Delete file</button>
     </article>
     {% else %}<p>No files on this page.</p>{% endfor %}

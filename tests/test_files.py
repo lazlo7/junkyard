@@ -73,6 +73,46 @@ def test_failed_migration_rolls_back(database, monkeypatch):
         assert connection.execute("SELECT name FROM sqlite_master WHERE name = 'partial'").fetchone() is None
 
 
+def test_v3_migration_preserves_existing_file_without_granting_access(database, settings, hashes):
+    store = FileStore(database, settings)
+    store.start()
+    try:
+        original = save(store)
+    finally:
+        store.close()
+    with database.connect() as connection, connection:
+        connection.execute("ALTER TABLE files DROP COLUMN file_token_hash")
+        connection.execute("PRAGMA user_version = 3")
+    with pytest.raises(StoreError, match="migrate"):
+        store.start()
+    database.migrate()
+    database.migrate()
+    store.start()
+    try:
+        assert read(store, original.id) == b"original"
+        assert store._find(original.id) == original
+        assert not store.list_files(1)["files"][0].has_token
+        assert (database.password_hash("cli"), database.password_hash("browser")) == hashes
+    finally:
+        store.close()
+
+
+def test_simultaneous_token_generation_has_one_winner(store):
+    file_id = save(store).id
+
+    def generate():
+        try:
+            return store.generate_file_token(file_id)
+        except FileError as error:
+            return error.status
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        attempts = [pool.submit(generate) for _ in range(2)]
+        results = [attempt.result() for attempt in attempts]
+    assert results.count(409) == 1
+    assert any(isinstance(result, str) and len(result) == 43 for result in results)
+
+
 def test_second_worker_is_refused(store):
     second = FileStore(store.database, store.settings)
     with pytest.raises(StoreError, match="one server worker"):
@@ -222,9 +262,9 @@ def test_publication_failure_never_deletes_a_referenced_blob(store, monkeypatch,
             publish(upload)
         raise OSError(errno.EIO, "injected publication failure")
 
-    def fail_commit(record, previous):
+    def fail_commit(record, previous, token_digest):
         if boundary == "after_commit":
-            commit(record, previous)
+            commit(record, previous, token_digest)
         raise StoreError("injected commit failure")
 
     monkeypatch.setattr(store, "_publish" if "publish" in boundary else "_commit",

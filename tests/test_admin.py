@@ -1,4 +1,5 @@
 from dataclasses import replace
+import hashlib
 import re
 
 from fastapi.testclient import TestClient
@@ -94,7 +95,128 @@ def test_admin_file_lifecycle_and_rotation(client, database):
     assert client.get("/admin/").status_code == 303
 
 
-@pytest.mark.parametrize("mutation", ["login", "upload", "replace", "edit", "delete", "logout", "rotate"])
+def test_file_token_lifecycle(client, database):
+    admin = login(client)
+    for endpoint in ("/u/report.txt?e=7d", "/admin/files?name=report.txt&e=7d"):
+        auth = ("admin", CLI_PASSWORD) if endpoint.startswith("/u/") else None
+        created = client.put(endpoint, headers=admin, auth=auth, content=b"first")
+        assert created.status_code == 201
+        original = created.json()
+        assert "token" not in original
+        file_id = original["id"]
+        path = "/" + file_id
+        manage = "/admin/files" + path + "/token"
+        with database.connect() as connection:
+            assert connection.execute("SELECT file_token_hash FROM files WHERE id = ?", (file_id,)).fetchone()[0] is None
+        response = client.post(manage, headers=admin)
+        assert response.status_code == 201 and response.headers["cache-control"] == "no-store"
+        token = response.json()["token"]
+        digest = hashlib.sha256(token.encode("ascii")).hexdigest()
+        with database.connect() as connection:
+            assert connection.execute("SELECT file_token_hash FROM files WHERE id = ?", (file_id,)).fetchone()[0] == digest
+        assert client.post(manage, headers=admin).status_code == 409
+        page = client.get("/admin/").text
+        assert "Token active." in page and token not in page and digest not in page
+        bearer = {"Authorization": "Bearer " + token, "Accept": "application/json"}
+        for revision, contents in enumerate((b"second", b"third"), start=2):
+            response = client.put(path, content=contents, headers=bearer)
+            assert response.status_code == 200
+            updated = response.json()
+            assert updated["revision"] == revision and updated["size"] == len(contents)
+            for key in ("id", "url", "filename", "created_at", "expires_at"):
+                assert updated[key] == original[key]
+            assert client.get(path).content == contents
+        assert client.delete(manage, headers=admin).status_code == 204
+        assert client.put(path, content=b"blocked", headers=bearer).status_code == 401
+        assert client.get(path).content == b"third"
+        new_token = client.post(manage, headers=admin).json()["token"]
+        assert new_token != token
+        assert client.put(path, content=b"blocked", headers=bearer).status_code == 401
+        assert client.put(path, content=b"fourth", headers={"Authorization": "Bearer " + new_token}).status_code == 200
+
+
+@pytest.fixture
+def file_token(client):
+    admin = login(client)
+    path = "/" + client.put("/admin/files?e=1h", content=b"original", headers=admin).json()["id"]
+    manage = "/admin/files" + path + "/token"
+    token = client.post(manage, headers=admin).json()["token"]
+    return path, manage, admin, {"Authorization": "Bearer " + token}
+
+
+@pytest.mark.parametrize("method,target,status", [
+    ("PUT", "/other", 401), ("PUT", "/u", 401), ("PUT", "/u/new", 401),
+    ("PATCH", "/target", 401), ("DELETE", "/target", 401), ("GET", "/target", 401),
+    ("GET", "/auth/check", 401), ("POST", "/manage", 401), ("DELETE", "/manage", 401),
+    ("PUT", "/target?name=new", 400), ("PUT", "/target?e=0", 400), ("PUT", "/target?extra=1", 400),
+])
+def test_file_token_scope_before_body(client, file_token, method, target, status):
+    path, manage, admin, bearer = file_token
+    other = "/" + client.put("/admin/files", headers=admin, content=b"other").json()["id"]
+    target = target.replace("/target", path).replace("/manage", manage).replace("/other", other)
+    client.cookies.clear()
+
+    def unread():
+        pytest.fail("Rejected token request consumed the body")
+        yield b"unreachable"
+
+    assert client.request(method, target, headers=bearer, content=unread()).status_code == status
+    assert client.get(path).content == b"original" and client.get(other).content == b"other"
+
+
+def test_file_token_management_requires_browser_session(client, file_token):
+    _, manage, admin, _ = file_token
+    client.cookies.clear()
+    for method in ("POST", "DELETE"):
+        assert client.request(method, manage, headers=admin).status_code == 401
+        assert client.request(method, manage, headers=admin, auth=("admin", CLI_PASSWORD)).status_code == 401
+
+
+def test_revocation_and_reissue_during_stream(client, file_token):
+    path, _, _, bearer = file_token
+    store = client.app.state.files
+
+    def body():
+        yield b"part one"
+        store.revoke_file_token(path[1:])
+        store.generate_file_token(path[1:])
+        yield b"part two"
+
+    assert client.put(path, headers=bearer, content=body()).status_code == 401
+    assert client.get(path).content == b"original"
+    assert store.used_bytes == len(b"original") and store._transfers == 0
+    assert not list(store.staging.iterdir())
+
+
+def test_file_token_ends_with_file_even_if_id_reused(client, file_token, monkeypatch):
+    path, manage, admin, bearer = file_token
+    store = client.app.state.files
+    expires_at = store._find(path[1:]).expires_at
+    monkeypatch.setattr(store, "_clock", lambda: expires_at)
+    assert client.put(path, headers=bearer, content=b"expired").status_code == 401
+    assert client.post(manage, headers=admin).status_code == 404
+    store.cleanup()
+    monkeypatch.setattr(store, "_new_id", lambda secure: path[1:])
+    for _ in range(2):
+        assert client.put("/admin/files", headers=admin, content=b"new file").status_code == 201
+        assert client.put(path, headers=bearer, content=b"wrong file").status_code == 401
+        token = client.post(manage, headers=admin).json()["token"]
+        bearer = {"Authorization": "Bearer " + token}
+        assert client.delete("/admin/files" + path, headers=admin).status_code == 204
+
+
+def test_bad_file_tokens_share_authentication_budget(client, file_token):
+    path, _, _, bearer = file_token
+    duplicate = [*bearer.items(), *bearer.items()]
+    assert client.put(path, headers=duplicate).status_code == 401
+    for invalid in ("", "x" * 42, "a" * 4097, "a" * 43):
+        assert client.put(path, headers={"Authorization": "Bearer " + invalid}).status_code == 401
+    assert client.put(path, headers=bearer).status_code == 429
+    assert client.get("/auth/check", auth=("admin", CLI_PASSWORD)).status_code == 429
+
+
+@pytest.mark.parametrize("mutation", ["login", "upload", "replace", "edit", "delete", "logout", "rotate",
+                                      "generate_token", "revoke_token"])
 @pytest.mark.parametrize("attack", ["missing_origin", "cross_origin", "missing_csrf", "wrong_csrf"])
 def test_all_mutations_require_origin_and_bound_csrf(client, mutation, attack):
     if mutation == "login":
@@ -114,6 +236,7 @@ def test_all_mutations_require_origin_and_bound_csrf(client, mutation, attack):
         "replace": ("PUT", "/admin/files/NoSuch"), "edit": ("PATCH", "/admin/files/NoSuch"),
         "delete": ("DELETE", "/admin/files/NoSuch"), "logout": ("POST", "/admin/logout"),
         "rotate": ("POST", "/admin/cli-password"),
+        "generate_token": ("POST", "/admin/files/NoSuch/token"), "revoke_token": ("DELETE", "/admin/files/NoSuch/token"),
     }[mutation]
     consumed = []
 

@@ -10,6 +10,7 @@ import time
 
 from starlette.requests import Request
 
+from junkyard.file_options import FILE_ID_PATTERN
 from junkyard.presentation import ASSETS, error_response
 
 logger = logging.getLogger("junkyard.requests")
@@ -34,6 +35,9 @@ def operation(scope) -> str:
         return "cli_password_change"
     if method == "PUT" and (path in ("/u", "/admin/files") or path.startswith("/u/")):
         return "upload"
+    if path.startswith("/admin/files/") and path.endswith("/token"):
+        if FILE_ID_PATTERN.fullmatch(path.removeprefix("/admin/files/").removesuffix("/token")):
+            return {"POST": "file_token_generate", "DELETE": "file_token_revoke"}.get(method, "unknown")
     file_path = path.removeprefix("/admin/files") if path.startswith("/admin/files/") else path
     if FILE_PATH.fullmatch(file_path):
         return {"GET": "read", "HEAD": "inspect", "PUT": "replace", "PATCH": "metadata", "DELETE": "delete"}.get(method, "unknown")

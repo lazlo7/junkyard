@@ -196,6 +196,7 @@ def test_v2_migration_preserves_files_and_credentials(database, settings, hashes
         store.close()
     with database.connect() as connection, connection:
         connection.execute("DROP TABLE browser_sessions")
+        connection.execute("ALTER TABLE files DROP COLUMN file_token_hash")
         connection.execute("PRAGMA user_version = 2")
     with pytest.raises(StoreError, match="migrate"):
         database.require_file_schema()
@@ -214,6 +215,7 @@ def test_v2_migration_preserves_files_and_credentials(database, settings, hashes
 def test_v2_migration_failure_rolls_back(database, monkeypatch):
     with database.connect() as connection, connection:
         connection.execute("DROP TABLE browser_sessions")
+        connection.execute("ALTER TABLE files DROP COLUMN file_token_hash")
         connection.execute("PRAGMA user_version = 2")
 
     def fail(connection):

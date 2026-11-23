@@ -1,6 +1,6 @@
 // Optional Chrome integration driver using Node's built-in WebSocket (no npm packages).
 import assert from "node:assert/strict";
-import {spawn} from "node:child_process";
+import {execFileSync, spawn} from "node:child_process";
 import {readFile, writeFile, mkdir} from "node:fs/promises";
 import {join} from "node:path";
 
@@ -83,6 +83,26 @@ try {
   await until(() => evaluate('!!document.querySelector(".file-entry")'), "upload");
   const id = await evaluate('document.querySelector(".edit-form").dataset.id');
   assert.equal(await evaluate(`fetch("/${id}/raw").then(r => r.text())`), "original browser bytes");
+  await evaluate('document.querySelector(".file-token").open = true');
+  await click(".generate-token");
+  await until(() => evaluate('!document.querySelector(".token-secret").hidden && document.querySelector(".token-secret input").value.length === 43'), "generate file token");
+  const token = await evaluate('document.querySelector(".token-secret input").value');
+  const curlConfig = join(options.directory, "file-token.curl");
+  await writeFile(curlConfig, `header = "Authorization: Bearer ${token}"\nproto = "=https"\n`, {mode: 0o600});
+  const update = () => execFileSync("curl", ["-q", "--config", curlConfig, "--noproxy", "*",
+    "--cacert", join(options.directory, "test-cert.pem"), "--silent", "--show-error", "--max-time", "5",
+    "--upload-file", "-", "--output", "/dev/null", "--write-out", "%{http_code}", options.origin + "/" + id],
+    {input: "scheduled update", encoding: "utf8"});
+  assert.equal(update(), "200");
+  assert.equal(await evaluate(`fetch("/${id}/raw").then(r => r.text())`), "scheduled update");
+  await click(".copy-token");
+  await until(() => evaluate('/copied|selected token/.test(document.querySelector(".file-token .form-status").textContent)'), "copy file token");
+  await command("Page.reload");
+  await until(() => evaluate('document.querySelector(".file-token .form-status")?.textContent === "Token active." && document.querySelector(".token-secret input").value === ""'), "one-time token display");
+  await evaluate('document.querySelector(".file-token").open = true');
+  await click(".revoke-token");
+  await until(() => evaluate('!document.querySelector(".generate-token").hidden && document.querySelector(".file-token .form-status").textContent === "Token revoked."'), "revoke file token");
+  assert.equal(update(), "401");
   await evaluate('document.querySelector("details").open = true');
   await value(`#name-${id}`, "renamed.txt");
   await click('.edit-form button[type="submit"]');

@@ -84,7 +84,8 @@ class DownloadResponse(StreamingResponse):
                 await run_in_threadpool(self.store.close_download, self.download)
 
 
-async def upload_file(request: Request, filename: str | None = None, file_id: str | None = None) -> Response:
+async def upload_file(request: Request, filename: str | None = None, file_id: str | None = None,
+                      token_digest: str | None = None) -> Response:
     store: FileStore = request.app.state.files
     validate_encoding(request.scope["raw_path"])
     options = parse_options(request.scope["query_string"], creating=file_id is None)
@@ -108,7 +109,7 @@ async def upload_file(request: Request, filename: str | None = None, file_id: st
         if getattr(request.state, "browser_session", None) is not None and request.url.path.startswith("/admin/"):
             # Recheck after a potentially long transfer, before publishing it.
             await run_in_threadpool(request.app.state.browser_auth.require_live, request.state.browser_session)
-        record = await run_in_threadpool(store.finish, upload)
+        record = await run_in_threadpool(store.finish, upload, token_digest)
         return mutation_response(request, record, 201 if file_id is None else 200)
     except ClientDisconnect:
         raise FileError(400, "Upload interrupted") from None
@@ -147,9 +148,14 @@ def install_file_routes(app: FastAPI) -> None:
     async def create_named(request: Request, filename: str):
         return await upload_file(request, filename=filename)
 
-    @app.put("/{file_id}", dependencies=[Depends(require_cli)])
+    @app.put("/{file_id}")
     async def replace_contents(request: Request, file_id: str):
-        return await upload_file(request, file_id=file_id)
+        digest = request.state.file_token_digest
+        if digest is None:
+            require_cli(request)
+        elif request.scope["query_string"]:
+            raise FileError(400, "File tokens allow content replacement only; omit query parameters")
+        return await upload_file(request, file_id=file_id, token_digest=digest)
 
     @app.patch("/{file_id}", dependencies=[Depends(require_cli)])
     async def patch_metadata(request: Request, file_id: str):

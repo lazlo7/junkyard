@@ -1,8 +1,9 @@
 # curl usage
 
 Always use the configured HTTPS origin. Ordinary curl/wget reads receive bytes;
-browser viewer HTML requires an explicit `Accept: text/html`. File management
-uses the **CLI** password and username `admin`, not the browser password.
+browser viewer HTML requires an explicit `Accept: text/html`. General file
+management uses the **CLI** password and username `admin`. A job that updates a
+single existing link can use a per-file token.
 
 ## Authentication
 
@@ -80,6 +81,30 @@ Do not automatically retry creates after an ambiguous network failure. The file
 may already have committed and a retry can create another link. Check the admin
 list before retrying. Interrupted uploads restart from the beginning.
 
+## Update one link from automation
+
+In the browser admin, open **Automation token** on the existing file and choose
+**Generate file token**. Copy the token before leaving the page. Use an editor
+to place it in a private curl config readable only by the job (mode `0600`).
+
+```text
+header = "Authorization: Bearer YOUR_FILE_TOKEN"
+proto = "=https"
+```
+
+Replace `ID` with that file’s ID and use the configured HTTPS origin.
+
+```sh
+curl -q --config /private/report-token.curl --fail --silent --show-error \
+  --upload-file report.txt https://files.example.com/ID
+```
+
+Each successful upload replaces the bytes at that link and preserves its filename
+and expiration. Use a bare file URL without query parameters. The job needs only
+the token and that URL. To stop updates, choose **Revoke file token**. If the
+secret is lost, revoke it and generate a replacement. An expired or deleted
+file also stops accepting the token.
+
 ## HEAD and ranges
 
 ```sh
@@ -105,7 +130,7 @@ validators do not enable a partial response.
 | Status | Meaning / next step |
 |---|---|
 | 400 | Invalid option, filename, framing, or trusted-proxy header |
-| 401 | Missing/wrong CLI credential; browser cookies do not authorize CLI writes |
+| 401 | Missing or invalid credential, revoked file token, or token used outside its file and operation |
 | 404 | Unknown, expired, or deleted link |
 | 409 | Target changed during an upload; inspect its current state before retrying |
 | 413 | File exceeds the matched proxy/application size limit |

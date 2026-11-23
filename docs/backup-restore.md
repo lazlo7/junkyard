@@ -72,6 +72,9 @@ deployed data; never overlay an existing live directory.
 5. Check SQLite integrity, then reset the **browser** password on the restored
    database to revoke sessions that came back with the snapshot. A restore can
    also bring back an older CLI password: reset it if necessary before exposure.
+   File tokens also return to their snapshot state. Review active tokens in the
+   restored dashboard and revoke any grants withdrawn since the snapshot before
+   reopening public access.
 6. Start the restored instance on the test port. Startup checks schema,
    permissions, blob references, and sizes before removing expired/orphaned data.
    Verify known live files by downloading them and comparing their bytes/checksums.
@@ -116,7 +119,7 @@ sudo -u junkyard /opt/junkyard/.venv/bin/junkyard --config /etc/junkyard/restore
 sudo -u junkyard /opt/junkyard/.venv/bin/junkyard --config /etc/junkyard/restore.toml serve
 ```
 
-If the snapshot predates schema 3, run `migrate` against the temporary configuration
+If the snapshot predates schema 4, run `migrate` against the temporary configuration
 before these steps. In another terminal, use the retained CLI credential (or a
 freshly reset one) for loopback checks, supplying the trusted-proxy header:
 

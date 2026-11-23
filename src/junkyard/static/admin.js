@@ -15,6 +15,7 @@ async function request(path, method, body, json = false) {
     if (response.status === 429) message += ` Retry after ${response.headers.get("Retry-After") || "a few"} seconds.`;
     throw new Error(message);
   }
+  return response;
 }
 
 async function perform(button, status, operation) {
@@ -54,6 +55,51 @@ for (const form of document.querySelectorAll(".admin-form")) {
         location.assign("/admin/");
       }
     });
+  });
+}
+
+for (const panel of document.querySelectorAll(".file-token")) {
+  const endpoint = `/admin/files/${panel.dataset.id}/token`;
+  const generate = panel.querySelector(".generate-token");
+  const revoke = panel.querySelector(".revoke-token");
+  const secret = panel.querySelector(".token-secret");
+  const field = secret.querySelector("input");
+  const status = panel.querySelector(".form-status");
+  function clearSecret() {
+    field.value = "";
+    secret.hidden = true;
+  }
+  window.addEventListener("pagehide", () => {
+    clearSecret();
+    if (!revoke.hidden) status.textContent = "Token active.";
+  });
+  generate.addEventListener("click", () => perform(generate, status, async () => {
+    const response = await request(endpoint, "POST");
+    field.value = (await response.json()).token;
+    generate.hidden = true;
+    revoke.hidden = false;
+    secret.hidden = false;
+    status.textContent = "Token active.";
+    field.focus();
+    field.select();
+  }));
+  revoke.addEventListener("click", () => perform(revoke, status, async () => {
+    await request(endpoint, "DELETE");
+    clearSecret();
+    revoke.hidden = true;
+    generate.hidden = false;
+    status.textContent = "Token revoked.";
+    generate.focus();
+  }));
+  panel.querySelector(".copy-token").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(field.value);
+      status.textContent = "Token copied.";
+    } catch {
+      field.focus();
+      field.select();
+      status.textContent = "Copy the selected token using your browser’s copy command.";
+    }
   });
 }
 

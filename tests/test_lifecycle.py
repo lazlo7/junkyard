@@ -84,10 +84,10 @@ def test_cleanup_protects_staging_and_published_upload_until_commit(store, monke
     assert upload.path.exists()
     commit = store._commit
 
-    def cleanup_during_publication(record, previous):
+    def cleanup_during_publication(record, previous, token_digest):
         store.cleanup()
         assert (store.blobs / record.blob).exists()
-        commit(record, previous)
+        commit(record, previous, token_digest)
 
     monkeypatch.setattr(store, "_commit", cleanup_during_publication)
     try:

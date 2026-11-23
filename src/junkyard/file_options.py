@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import re
 from urllib.parse import parse_qsl, unquote_to_bytes
 
+FILE_ID_PATTERN = re.compile(r"(?:[A-Za-z0-9_-]{6}|[A-Za-z0-9_-]{32})")
+
 
 class FileError(Exception):
     def __init__(self, status: int, detail: str, headers: dict[str, str] | None = None):
@@ -14,7 +16,7 @@ class FileError(Exception):
 
 
 def validate_id(value: str) -> None:
-    if not re.fullmatch(r"(?:[A-Za-z0-9_-]{6}|[A-Za-z0-9_-]{32})", value):
+    if not FILE_ID_PATTERN.fullmatch(value):
         raise FileError(404, "File not found")
 
 

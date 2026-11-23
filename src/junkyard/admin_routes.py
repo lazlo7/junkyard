@@ -172,6 +172,19 @@ def install_admin_routes(app) -> None:
         await run_in_threadpool(request.app.state.files.delete, file_id)
         return Response(status_code=204, headers=PRIVATE_HEADERS)
 
+    @app.api_route("/admin/files/{file_id}/token", methods=["POST", "DELETE"], dependencies=[Depends(require_browser)])
+    async def manage_file_token(request: Request, file_id: str):
+        no_body(request)
+        validate_encoding(request.scope["raw_path"])
+        if request.scope["query_string"]:
+            raise FileError(400, "File token management does not accept query parameters")
+        store = request.app.state.files
+        if request.method == "POST":
+            token = await run_in_threadpool(store.generate_file_token, file_id)
+            return JSONResponse({"token": token}, status_code=201, headers=PRIVATE_HEADERS)
+        await run_in_threadpool(store.revoke_file_token, file_id)
+        return Response(status_code=204, headers=PRIVATE_HEADERS)
+
     @app.post("/admin/cli-password")
     async def rotate_cli(request: Request, session=Depends(require_browser)):
         async with credential_attempt(request):

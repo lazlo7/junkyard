@@ -59,8 +59,8 @@ sudo -u junkyard /opt/junkyard/.venv/bin/junkyard --config /etc/junkyard/junkyar
 ```
 
 For an existing installation, stop the server, take an [offline backup](backup-restore.md),
-and run `migrate` instead of `init`. Milestone 6 keeps schema version 3; databases
-already migrated for milestone 5 need no further upgrade. Password recovery uses
+and run `migrate` instead of `init`. Databases on schema versions 1–3 require an
+upgrade to version 4 for file tokens. Password recovery uses
 `passwd cli` or `passwd browser` with the same executable and `--config` prefix.
 
 ## Run with systemd

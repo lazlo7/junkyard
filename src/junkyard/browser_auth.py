@@ -13,7 +13,7 @@ from starlette.requests import Request
 
 from junkyard.database import Database, StoreError
 from junkyard.file_options import FileError
-from junkyard.security import CLIAuthenticator, PASSWORD_HASHER, hash_password
+from junkyard.security import CLIAuthenticator, PASSWORD_HASHER, TOKEN_PATTERN, hash_password, token_hash
 
 SESSION_COOKIE = "__Host-junkyard-session"
 LOGIN_COOKIE = "__Host-junkyard-login"
@@ -21,11 +21,6 @@ IDLE_SECONDS = 3600
 ABSOLUTE_SECONDS = 12 * 3600
 LOGIN_SECONDS = 600
 MAX_SESSIONS = 32
-TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{43}")
-
-
-def token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode("ascii")).hexdigest()
 
 
 def csrf_token(token: str) -> str:

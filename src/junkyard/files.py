@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import sqlite3
 import stat
 import threading
 import time
@@ -20,9 +21,12 @@ from typing import BinaryIO, Callable
 from junkyard.config import Settings
 from junkyard.database import Database, StoreError
 from junkyard.file_options import FileError, FileOptions, expiration_at, validate_id, validate_name
+from junkyard.security import FILE_CHALLENGE, token_hash
 
 CHUNK_SIZE = 64 * 1024
 ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+FILE_COLUMNS = "id, blob, name, size, created_at, modified_at, expires_at, revision"
+LIVE_FILE = "id = ? AND (expires_at IS NULL OR expires_at > ?)"
 logger = logging.getLogger(__name__)
 
 
@@ -36,6 +40,11 @@ class FileRecord:
     modified_at: int
     expires_at: int | None
     revision: int
+
+
+@dataclass(frozen=True)
+class ListedFile(FileRecord):
+    has_token: bool
 
 
 @dataclass
@@ -192,9 +201,10 @@ class FileStore:
             now = int(self._clock())
             connection.execute("BEGIN")
             total = connection.execute("SELECT COUNT(*) FROM files WHERE expires_at IS NULL OR expires_at > ?", (now,)).fetchone()[0]
-            rows = connection.execute("""SELECT * FROM files WHERE expires_at IS NULL OR expires_at > ?
+            rows = connection.execute(f"""SELECT {FILE_COLUMNS}, file_token_hash IS NOT NULL AS has_token
+                FROM files WHERE expires_at IS NULL OR expires_at > ?
                 ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?""", (now, page_size, (page - 1) * page_size)).fetchall()
-            return {"files": [FileRecord(**dict(row)) for row in rows], "page": page,
+            return {"files": [ListedFile(**dict(row)) for row in rows], "page": page,
                     "pages": max(1, (total + page_size - 1) // page_size), "total": total,
                     "used_bytes": self.used_bytes, "quota_bytes": self.settings.storage_quota_bytes}
 
@@ -206,10 +216,41 @@ class FileStore:
     def _find(self, file_id: str) -> FileRecord:
         validate_id(file_id)
         with self.database.connect() as connection:
-            row = connection.execute("SELECT * FROM files WHERE id = ?", (file_id,)).fetchone()
-        if row is None or (row["expires_at"] is not None and row["expires_at"] <= int(self._clock())):
+            row = connection.execute(f"SELECT {FILE_COLUMNS} FROM files WHERE {LIVE_FILE}",
+                                     (file_id, int(self._clock()))).fetchone()
+        if row is None:
             raise FileError(404, "File not found")
         return FileRecord(**dict(row))
+
+    def generate_file_token(self, file_id: str) -> str:
+        validate_id(file_id)
+        token = secrets.token_urlsafe(32)
+        with self.database.connect() as connection, connection:
+            target = (file_id, int(self._clock()))
+            result = connection.execute(f"UPDATE files SET file_token_hash = ? WHERE {LIVE_FILE} AND file_token_hash IS NULL",
+                                        (token_hash(token), *target))
+            if result.rowcount == 0:
+                if connection.execute(f"SELECT 1 FROM files WHERE {LIVE_FILE}", target).fetchone() is None:
+                    raise FileError(404, "File not found")
+                raise FileError(409, "File token already active; revoke it before generating another")
+        return token
+
+    def revoke_file_token(self, file_id: str) -> None:
+        validate_id(file_id)
+        with self.database.connect() as connection, connection:
+            result = connection.execute(f"UPDATE files SET file_token_hash = NULL WHERE {LIVE_FILE}",
+                                        (file_id, int(self._clock())))
+            if result.rowcount == 0:
+                raise FileError(404, "File not found")
+
+    def _token_matches(self, connection: sqlite3.Connection, file_id: str, digest: str) -> bool:
+        row = connection.execute(f"SELECT file_token_hash FROM files WHERE {LIVE_FILE}",
+                                 (file_id, int(self._clock()))).fetchone()
+        return row is not None and row[0] is not None and secrets.compare_digest(row[0], digest)
+
+    def verify_file_token(self, file_id: str, digest: str) -> bool:
+        with self.database.connect() as connection:
+            return self._token_matches(connection, file_id, digest)
 
     def begin(self, options: FileOptions, file_id: str | None = None) -> Upload:
         if options.name is not None:
@@ -280,12 +321,14 @@ class FileStore:
         _sync_directory(self.blobs)
         _sync_directory(self.staging)
 
-    def _commit(self, record: FileRecord, previous: FileRecord | None) -> None:
+    def _commit(self, record: FileRecord, previous: FileRecord | None, token_digest: str | None = None) -> None:
         with self.database.connect() as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
+            if token_digest is not None and not self._token_matches(connection, record.id, token_digest):
+                raise FileError(401, "Invalid file token", FILE_CHALLENGE)
             if previous is None:
                 connection.execute(
-                    "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    f"INSERT INTO files ({FILE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (record.id, record.blob, record.name, record.size, record.created_at,
                      record.modified_at, record.expires_at, record.revision),
                 )
@@ -299,7 +342,7 @@ class FileStore:
                 if result.rowcount != 1:
                     raise FileError(409, "File changed or disappeared during the update")
 
-    def finish(self, upload: Upload) -> FileRecord:
+    def finish(self, upload: Upload, token_digest: str | None = None) -> FileRecord:
         with self._lock:
             if upload.released or upload.published:
                 raise StoreError("upload is no longer writable")
@@ -326,7 +369,12 @@ class FileStore:
                 size=upload.size, created_at=previous.created_at if previous else now,
                 modified_at=now, expires_at=expiration, revision=previous.revision + 1 if previous else 1,
             )
-            self._commit(record, previous)
+            try:
+                self._commit(record, previous, token_digest)
+            except FileError:
+                # A rejected metadata transaction never referenced the new blob.
+                self._discard(upload.blob)
+                raise
             if previous is not None:
                 self._discard(previous.blob)
             return record

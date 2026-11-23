@@ -3,6 +3,8 @@
 import base64
 import binascii
 from contextlib import contextmanager
+import hashlib
+import re
 import secrets
 import threading
 
@@ -15,6 +17,12 @@ from junkyard.database import Database, StoreError
 MAX_PASSWORD_BYTES = 1024
 PASSWORD_HASHER = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=1, type=Type.ID)
 CHALLENGE = {"WWW-Authenticate": 'Basic realm="junkyard-cli", charset="UTF-8"', "Cache-Control": "no-store"}
+FILE_CHALLENGE = {"WWW-Authenticate": 'Bearer realm="junkyard-file"', "Cache-Control": "no-store"}
+TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{43}")
+
+
+def token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("ascii")).hexdigest()
 
 
 def require_cli(request: Request) -> None:
